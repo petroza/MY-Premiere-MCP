@@ -253,9 +253,25 @@
       var lines = cp.execSync('where.exe ' + name, { encoding: 'utf8', windowsHide: true }).split(/\r?\n/);
       for (var i = 0; i < lines.length; i++) if (/\.exe$/i.test(lines[i].trim())) return lines[i].trim();
       return lines[0].trim() || null;
-    } catch (e) {
-      return null;
+    } catch (e) {}
+
+    // Premiere/CEP inherits PATH when Premiere starts, so it may not see a Codex
+    // installed or updated by the desktop app later. Look in Codex's local app
+    // directory as a fallback; each app build keeps the CLI in its own folder.
+    if (name === 'codex') {
+      var codexBin = path.join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'bin');
+      try {
+        var builds = fs.readdirSync(codexBin).map(function (entry) {
+          var exe = path.join(codexBin, entry, 'codex.exe');
+          return fs.existsSync(exe) ? { exe: exe, mtime: fs.statSync(exe).mtimeMs } : null;
+        }).filter(Boolean).sort(function (a, b) { return b.mtime - a.mtime; });
+        if (builds.length) return builds[0].exe;
+      } catch (e) {}
+
+      var npmShim = path.join(process.env.APPDATA || '', 'npm', 'codex.cmd');
+      if (fs.existsSync(npmShim)) return npmShim;
     }
+    return null;
   }
 
   function setAiIcon(agentOrNull) {
@@ -412,7 +428,24 @@
   function handleCodexEvent(ev) {
     var m = ev.msg || ev;
     var t = m.type || '';
-    if (t === 'agent_message' || t === 'agent_message_delta') { if (m.message) out(m.message, 'ai'); }
+    if (t === 'thread.started') {
+      sessionId = m.thread_id || sessionId;
+    } else if (t === 'agent_message' || t === 'agent_message_delta') {
+      if (m.message) out(m.message, 'ai');
+    } else if (t === 'item.completed') {
+      var item = m.item || {};
+      if (item.type === 'agent_message' && item.text) out(item.text, 'ai');
+      else if (item.type === 'mcp_tool_call') {
+        out('⚙ ' + (item.tool || item.name || 'MCP') + ' ' + shortInput(item.arguments), 'tool');
+        if (item.error) out('✖ ' + String(item.error), 'err');
+      } else if (item.type === 'error') {
+        out('✖ ' + (item.message || JSON.stringify(item)), 'err');
+      }
+    } else if (t === 'turn.completed') {
+      out('✔ hotovo', 'dim');
+    } else if (t === 'turn.failed') {
+      out('✖ ' + ((m.error && m.error.message) || m.message || 'Codex skončil s chybou'), 'err');
+    }
     else if (/mcp_tool_call/.test(t)) out('⚙ ' + ((m.invocation && m.invocation.tool) || t) + ' ' + shortInput(m.invocation && m.invocation.arguments), 'tool');
     else if (t === 'error') out('✖ ' + (m.message || JSON.stringify(m)), 'err');
     else if (t === 'task_complete') out('✔ hotovo', 'dim');
