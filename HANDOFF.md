@@ -17,7 +17,7 @@
 
 ## 3. Architektura
 ```
-Claude/Codex ──stdio──► server/index.js (MCP "premiere", 40 nástrojů)
+Claude/Codex ──stdio──► server/index.js (MCP "premiere", 41 nástrojů)
                            ├─HTTP 127.0.0.1:7880 + token ─► CEP panel com.pz.premieremcp (panel/main.js) ─► panel/host/host.jsx (ExtendScript ES3)
                            └─HTTP 127.0.0.1:7881 + token ─► worker/server.py (fronta úloh, .venv Python 3.11)
                                                               ├ asr.py      faster-whisper large-v3 CUDA (models/whisper-large-v3)
@@ -103,7 +103,7 @@ Uživatel chtěl: 1) obrazovou analýzu (Claude i lokální vidění) pro párov
   - `EXTERNI_AI_INSTRUKCE.md` v kořeni projektu – statický text pro vložení do ChatGPT (formát přepisu, pravidla výběru, přesný výstupní JSON formát).
   - Panel: sbalená sekce "Záložní varianta: jiná AI" s tlačítky **Otevřít instrukce** / **Vzor: exportovat analýzu** / **Vzor: sestříhat podle plánu** (vyplní prompt šablonou, uživatel doplní cestu a klikne Spustit – nejde o přímý bypass agenta, protože export/import logika žije v `server/index.js`, ne v `host.jsx`, takže panel na ni nemá přímý HTTP most jako na ExtendScript; cena za jedno mechanické volání je ale jen ~$0,10, nevadí to).
 - **`START.bat`** v kořeni – zahřeje Worker na pozadí + spustí Premiere, jedno kliknutí.
-- Regrese po všech změnách: `smoke.mjs` (40 nástrojů), `verify-host.mjs`, `test-multicam-unit.mjs` (10/10), `test_repair_json.py` (4/4) – vše OK. Živě ověřeno i `analyze_transcript` (Gemma3) hned po použití vision modelu – GPU vytěsňování funguje obousměrně.
+- Regrese po všech změnách: `smoke.mjs` (41 nástrojů), `verify-host.mjs`, `test-multicam-unit.mjs` (10/10), `test_repair_json.py` (4/4) – vše OK. Živě ověřeno i `analyze_transcript` (Gemma3) hned po použití vision modelu – GPU vytěsňování funguje obousměrně.
 
 ## 5d. Další reálný test (2026-09-16, dopoledne) – studiové video, diarizace funguje
 

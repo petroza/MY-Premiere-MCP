@@ -608,14 +608,17 @@ tool(
 
 tool(
   'search_transcript',
-  'Najde v přepisu věty obsahující text (bez ohledu na diakritiku a velikost písmen).',
+  'Najde v přepisu věty obsahující text jako celé slovo/frázi na hranicích slov (bez ohledu na diakritiku a velikost písmen). ' +
+    'Hledání "já" tedy nenajde "jaký" ani "jazyk" – jen samostatné slovo "já".',
   { path: z.string(), query: z.string(), context: z.number().int().optional().describe('Počet okolních vět (výchozí 1)') },
   async ({ path: p, query, context = 1 }) => {
     const tr = loadTranscript(p);
-    const q = stripDiacritics(query);
+    const q = stripDiacritics(query).trim();
+    if (!q) throw new Error('Prázdný dotaz.');
+    const re = new RegExp(`\\b${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
     const hits = new Set();
     tr.segments.forEach((s, i) => {
-      if (stripDiacritics(s.text).includes(q)) {
+      if (re.test(stripDiacritics(s.text))) {
         for (let k = Math.max(0, i - context); k <= Math.min(tr.segments.length - 1, i + context); k++) hits.add(k);
       }
     });
@@ -900,6 +903,21 @@ tool(
     gap: z.number().optional(),
   },
   (a) => buildAndReport(a.name, a.segments, a.gap ?? 0, {}),
+);
+
+tool(
+  'detect_scene_cuts',
+  'Najde skutečné vizuální střihy kamer zapečené uvnitř JEDNOHO spojitého zdrojového souboru (Premierina Scene Edit Detection – ' +
+    'pozná změnu obrazu, ne kdo mluví). Spustit jen na výslovné přání uživatele – vytvoří dočasnou pracovní sekvenci se zadaným ' +
+    'zdrojem a rozsahem. U delšího úseku (přes ~5 min) to může trvat přes minutu, radši zvol kratší rozsah přes "to". ' +
+    'Vrací časy střihů VE ZDROJI (ne v timeline). Hodí se jako doplňkový signál ke zvukové diarizaci pro multicam, nebo na ' +
+    'nalezení skrytých řezů v jednom dlouhém záběru.',
+  {
+    source: z.string().describe('Cesta ke zdrojovému video souboru'),
+    to: z.number().optional().describe('Do kolika sekund od začátku zdroje analyzovat (výchozí celý soubor – pozor, může být pomalé)'),
+    sensitivity: z.string().optional().describe('Citlivost detekce v Premiere, výchozí "LowSensitivity" (jediná ověřená hodnota)'),
+  },
+  (a) => premiere('detectSceneCuts', a, 300000),
 );
 
 tool(

@@ -51,7 +51,7 @@ a delší ticho jdou do celku, monology delší než 14 s se prostřihnou, nejkr
 Výsledek je obyčejná sekvence (V1 = obraz kamer bez jejich zvuku, A1 = hlavní zvuk) – dá se dál ručně upravit.
 `dryRun: true` vrátí plán bez Premiere; `picks` kombinují střih příběhu s přepínáním kamer.
 
-## Nástroje (40)
+## Nástroje (41)
 | Skupina | Nástroje |
 |---|---|
 | Stav a projekt | `premiere_status`, `get_project`, `list_project_items`, `import_media`, `save_project`, `undo`, `worker_status`, `job_status` |
@@ -61,6 +61,7 @@ Výsledek je obyčejná sekvence (V1 = obraz kamer bez jejich zvuku, A1 = hlavn�
 | Obrazová analýza | `get_frame` (vrátí snímek jako obrázek – pro Claude vidění), `describe_frame` (popis lokálním vision modelem Qwen3-VL, zdarma) |
 | Externí AI (ChatGPT apod.) | `export_analysis` (uloží osnovu+přepis do .md), `build_from_plan` (sestříhá podle JSON plánu od jiné AI) – viz `EXTERNI_AI_INSTRUKCE.md` |
 | Střih (nedestruktivní) | `build_sequence_from_transcript`, `build_sequence_without_pauses`, `build_sequence`, `build_multicam_sequence`, `sync_media` |
+| Detekce střihu (obraz) | `detect_scene_cuts` (najde skutečné vizuální řezy kamer zapečené v jednom zdroji – Premierina Scene Edit Detection, jen na výslovné přání) |
 | Titulky | `add_captions` (vygeneruje české titulky z přepisu podle aktuálního stavu timeline a přidá nativní titulkovou stopu do Premiery) |
 | Střih (destruktivní) | `remove_timeline_ranges`, `razor`, `remove_clips` |
 | Vývoj | `run_extendscript`, `reload_bridge` |

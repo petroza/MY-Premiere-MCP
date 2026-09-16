@@ -26,6 +26,7 @@ Ovládáš Adobe Premiere Pro přes MCP server `premiere`. Uživatel píše čes
 2. `build_multicam_sequence` s kamerami `{source, role: wide|close, speakers:[jméno]}` – offsety se dopočítají ze zvuku.
    Nejdřív `dryRun: true`, zkontroluj nejisté synchronizace a nenamapované mluvčí, pak ostrý běh.
 3. Lze kombinovat se střihem příběhu: `picks` (ID vět reference) → kamery se přepínají jen ve vybraných úsecích.
+4. Umí doplnit i `detect_scene_cuts` – najde skutečné vizuální střihy kamer zapečené uvnitř jednoho zdrojového souboru (ne podle zvuku). Volej jen když o to uživatel výslovně požádá (např. "najdi řezy kamer v tomhle záznamu"/"detekuj střihy") – vytvoří dočasnou sekvenci, u dlouhého úseku může trvat přes minutu.
 
 ## Pravidla
 - Časy jsou v sekundách. Časy přepisu jsou ve zdroji, `transcribe_sequence` vrací časy timeline.

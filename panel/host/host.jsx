@@ -504,6 +504,29 @@ var PMCP = {};
     return { added: true, sequence: seq.name };
   };
 
+  api.detectSceneCuts = function (a) {
+    needProject();
+    if (!a.source) throw new Error('Missing source');
+    var item = resolveItem(a.source, true);
+    var seq = app.project.createNewSequenceFromClips('SCENE DETECT ' + item.name, [item], app.project.getInsertionBin());
+    if (!seq) throw new Error('Nepodařilo se vytvořit dočasnou sekvenci.');
+    var vt = seq.videoTracks[0].clips[0];
+    var at = seq.audioTracks[0] && seq.audioTracks[0].clips.numItems ? seq.audioTracks[0].clips[0] : null;
+    if (a.to !== undefined && a.to > 0 && a.to < vt.end.seconds) {
+      vt.end = timeObj(a.to);
+      vt.outPoint = timeObj(a.to);
+      if (at) { at.end = timeObj(a.to); at.outPoint = timeObj(a.to); }
+    }
+    vt.setSelected(true, true);
+    var ok = seq.performSceneEditDetectionOnSelection('CreateMarkers', false, a.sensitivity || 'LowSensitivity');
+    if (!ok) throw new Error('performSceneEditDetectionOnSelection selhalo.');
+    var mk = vt.projectItem.getMarkers();
+    var cuts = [];
+    var m = mk.getFirstMarker();
+    while (m) { cuts.push(r3(m.start.seconds)); m = mk.getNextMarker(m); }
+    return { sequence: seq.name, sequenceID: seq.sequenceID, analyzed: r3(vt.end.seconds), cuts: cuts, count: cuts.length };
+  };
+
   PMCP.api = api;
   PMCP.toJSON = toJSON;
   PMCP.call = function (name, argsJson) {
