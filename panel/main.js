@@ -12,6 +12,7 @@
   var http = require('http');
   var crypto = require('crypto');
   var cp = require('child_process');
+  var os = require('os');
 
   var extDir = decodeURIComponent(window.location.pathname).replace(/^\/+/, '').replace(/\/[^\/]*$/, '');
   try { extDir = fs.realpathSync(extDir); } catch (e) {}
@@ -261,6 +262,112 @@
     $('aiClaude').classList.toggle('on', agentOrNull === 'claude');
     $('aiGpt').classList.toggle('on', agentOrNull === 'codex');
   }
+
+  /* ---------------- diktování (mikrofon -> lokální Whisper) ---------------- */
+  var micStream = null;
+  var mediaRecorder = null;
+
+  function submitTranscribeJob(filePath) {
+    return new Promise(function (resolve, reject) {
+      var payload = JSON.stringify({ type: 'transcribe', params: { path: filePath, language: 'cs' } });
+      var req = http.request(
+        { host: '127.0.0.1', port: WORKER_PORT, path: '/jobs', method: 'POST', timeout: 5000,
+          headers: { 'X-PMCP-Token': TOKEN, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } },
+        function (res) {
+          var body = '';
+          res.setEncoding('utf8');
+          res.on('data', function (c) { body += c; });
+          res.on('end', function () {
+            try { resolve(JSON.parse(body).id); } catch (e) { reject(e); }
+          });
+        },
+      );
+      req.on('error', reject);
+      req.write(payload);
+      req.end();
+    });
+  }
+
+  function pollTranscribeJob(id, startedAt) {
+    startedAt = startedAt || Date.now();
+    return new Promise(function (resolve, reject) {
+      if (Date.now() - startedAt > 90000) { reject(new Error('časový limit přepisu')); return; }
+      var req = http.request(
+        { host: '127.0.0.1', port: WORKER_PORT, path: '/jobs/' + id, method: 'GET', timeout: 3000, headers: { 'X-PMCP-Token': TOKEN } },
+        function (res) {
+          var body = '';
+          res.setEncoding('utf8');
+          res.on('data', function (c) { body += c; });
+          res.on('end', function () {
+            try {
+              var job = JSON.parse(body);
+              if (job.status === 'done') {
+                var data = JSON.parse(fs.readFileSync(job.result.file, 'utf8'));
+                resolve((data.segments || []).map(function (s) { return s.text; }).join(' ').trim());
+              } else if (job.status === 'error') {
+                reject(new Error(job.error || 'chyba přepisu'));
+              } else {
+                setTimeout(function () { pollTranscribeJob(id, startedAt).then(resolve, reject); }, 600);
+              }
+            } catch (e) { reject(e); }
+          });
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  function startDictation() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      out('✖ Mikrofon není v tomhle panelu dostupný.', 'err');
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      micStream = stream;
+      var chunks = [];
+      mediaRecorder = new MediaRecorder(stream);
+      mediaRecorder.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+      mediaRecorder.onstop = function () {
+        micStream.getTracks().forEach(function (t) { t.stop(); });
+        micStream = null;
+        $('mic').classList.remove('recording');
+        if (!chunks.length) { out('🎤 žádná nahrávka.', 'dim'); return; }
+        $('mic').disabled = true;
+        out('🎤 přepisuji nahrávku (lokálně)…', 'dim');
+        var blob = new Blob(chunks, { type: 'audio/webm' });
+        blob.arrayBuffer().then(function (buf) {
+          var tmpPath = path.join(os.tmpdir(), 'pmcp-dikt-' + Date.now() + '.webm');
+          fs.writeFileSync(tmpPath, Buffer.from(buf));
+          return submitTranscribeJob(tmpPath).then(function (jobId) {
+            return pollTranscribeJob(jobId);
+          }).finally(function () {
+            try { fs.unlinkSync(tmpPath); } catch (e) {}
+          });
+        }).then(function (text) {
+          if (!text) { out('🎤 nerozpoznal jsem žádný text.', 'err'); return; }
+          var cur = $('prompt').value;
+          $('prompt').value = cur.trim() ? cur.trim() + ' ' + text : text;
+          $('prompt').focus();
+          out('🎤 „' + text + '“', 'dim');
+        }).catch(function (e) {
+          out('✖ Diktování selhalo: ' + e.message, 'err');
+        }).finally(function () {
+          $('mic').disabled = false;
+        });
+      };
+      mediaRecorder.start();
+      $('mic').classList.add('recording');
+      out('🎤 nahrávám… (klikni znovu pro ukončení)', 'dim');
+    }).catch(function (e) {
+      out('✖ Mikrofon nedostupný: ' + e.message, 'err');
+    });
+  }
+
+  $('mic').addEventListener('click', function () {
+    if (mediaRecorder && mediaRecorder.state === 'recording') { mediaRecorder.stop(); return; }
+    startDictation();
+  });
 
   function stopAgent() {
     if (!child) return;

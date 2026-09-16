@@ -19,8 +19,12 @@
   #workerPulse.on { background:var(--ok); }
   .ai-icon { display:none; width:15px; height:15px; flex:none; }
   .ai-icon.on { display:inline-block; }
-  .ai-icon.on svg { animation: spin-anim 1.4s linear infinite; display:block; }
+  .ai-icon.on svg { display:block; transform-origin:center; }
+  #aiClaude.on svg { animation: claude-breathe 1.6s ease-in-out infinite; }
+  #aiGpt.on svg { animation: spin-anim 1.4s linear infinite; }
   @keyframes spin-anim { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+  @keyframes claude-breathe { 0%,100% { transform:scale(.8) rotate(0deg); opacity:.55; } 50% { transform:scale(1.15) rotate(20deg); opacity:1; } }
+  #mic.recording { background:var(--err); border-color:var(--err); color:#fff; animation: pulse-anim 1s ease-in-out infinite; }
   .row { display:flex; gap:6px; align-items:center; }
   textarea { width:100%; min-height:74px; resize:vertical; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px; font:inherit; }
   select, button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:inherit; }
@@ -72,7 +76,7 @@
     <span id="workerText">Worker: …</span>
   </div>
 
-  <textarea id="prompt" placeholder="Např.: Přepiš zvuk aktivní sekvence a udělej novou sekvenci jen s větami o cenách, ať to dává smysl. Vyhoď přeřeknutí a dlouhé pauzy."></textarea>
+  <textarea id="prompt" lang="cs" spellcheck="false" placeholder="Např.: Přepiš zvuk aktivní sekvence a udělej novou sekvenci jen s větami o cenách, ať to dává smysl. Vyhoď přeřeknutí a dlouhé pauzy."></textarea>
   <div class="row">
     <select id="agent">
       <option value="claude">Claude Code</option>
@@ -85,6 +89,7 @@
     </select>
     <label class="row" title="Navázat na předchozí konverzaci"><input type="checkbox" id="pokracovat" checked> navázat</label>
     <label class="row" title="Zobrazit i technické volání nástrojů (ladění)"><input type="checkbox" id="nastroje"> nástroje</label>
+    <button id="mic" title="Nadiktovat zadání mikrofonem (lokálně, Whisper) - klikni, mluv, klikni znovu">🎤</button>
     <span class="grow"></span>
     <button id="undo" title="Vrátí jeden krok zpět v Premiere. Funguje jen na jedno použití mezi akcemi - klikni jednou a zkontroluj výsledek, opakované klikání za sebou může klip poškodit místo opravit.">↶ Zpět</button>
     <button id="stop" disabled>Stop</button>
