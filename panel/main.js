@@ -257,11 +257,16 @@
     }
   }
 
+  function setAiIcon(agentOrNull) {
+    $('aiClaude').classList.toggle('on', agentOrNull === 'claude');
+    $('aiGpt').classList.toggle('on', agentOrNull === 'codex');
+  }
+
   function stopAgent() {
     if (!child) return;
     try { cp.execSync('taskkill /pid ' + child.pid + ' /T /F', { windowsHide: true }); } catch (e) {}
     child = null;
-    $('aiPulse').classList.remove('on');
+    setAiIcon(null);
   }
 
   function shortInput(obj) {
@@ -338,7 +343,7 @@
     $('run').disabled = true;
     $('undo').disabled = false; // nová akce = čerstvá historie, undo zámek z předchozí akce už neplatí
     $('stop').disabled = false;
-    $('aiPulse').classList.add('on');
+    setAiIcon(agent);
 
     var useShell = /\.(cmd|bat)$/i.test(exe);
     child = cp.spawn(exe, args, { cwd: ROOT, windowsHide: true, shell: useShell, env: process.env });
@@ -369,13 +374,14 @@
       child = null;
       $('run').disabled = false;
       $('stop').disabled = true;
-      $('aiPulse').classList.remove('on');
+      setAiIcon(null);
     });
   }
 
   $('run').addEventListener('click', runAgent);
   $('stop').addEventListener('click', function () { stopAgent(); out('■ zastaveno', 'dim'); });
   $('prompt').addEventListener('keydown', function (ev) {
-    if (ev.key === 'Enter' && (ev.ctrlKey || ev.metaKey)) runAgent();
+    // Enter samotný spustí zadání, Shift+Enter dělá nový řádek (běžná konvence chatu).
+    if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); runAgent(); }
   });
 })();

@@ -16,8 +16,11 @@
   .pulse { display:none; width:8px; height:8px; border-radius:50%; flex:none; }
   .pulse.on { display:inline-block; animation: pulse-anim 1s ease-in-out infinite; }
   @keyframes pulse-anim { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.35; transform:scale(1.7); } }
-  #aiPulse.on { background:var(--accent); }
   #workerPulse.on { background:var(--ok); }
+  .ai-icon { display:none; width:15px; height:15px; flex:none; }
+  .ai-icon.on { display:inline-block; }
+  .ai-icon.on svg { animation: spin-anim 1.4s linear infinite; display:block; }
+  @keyframes spin-anim { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
   .row { display:flex; gap:6px; align-items:center; }
   textarea { width:100%; min-height:74px; resize:vertical; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px; font:inherit; }
   select, button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:inherit; }
@@ -35,7 +38,33 @@
     <span id="dot" class="dot"></span>
     <h1>MY Premiere MCP</h1>
     <span id="stav">startuji…</span>
-    <span id="aiPulse" class="pulse" title="AI (Claude/Codex) pracuje"></span>
+    <span id="aiClaude" class="ai-icon" title="Claude pracuje">
+      <svg viewBox="0 0 24 24" width="15" height="15">
+        <g fill="#D97757">
+          <ellipse cx="12" cy="6.2" rx="1.5" ry="4.6"/>
+          <ellipse cx="12" cy="6.2" rx="1.5" ry="4.6" transform="rotate(45 12 12)"/>
+          <ellipse cx="12" cy="6.2" rx="1.5" ry="4.6" transform="rotate(90 12 12)"/>
+          <ellipse cx="12" cy="6.2" rx="1.5" ry="4.6" transform="rotate(135 12 12)"/>
+          <ellipse cx="12" cy="6.2" rx="1.5" ry="4.6" transform="rotate(180 12 12)"/>
+          <ellipse cx="12" cy="6.2" rx="1.5" ry="4.6" transform="rotate(225 12 12)"/>
+          <ellipse cx="12" cy="6.2" rx="1.5" ry="4.6" transform="rotate(270 12 12)"/>
+          <ellipse cx="12" cy="6.2" rx="1.5" ry="4.6" transform="rotate(315 12 12)"/>
+        </g>
+      </svg>
+    </span>
+    <span id="aiGpt" class="ai-icon" title="Codex (GPT) pracuje">
+      <svg viewBox="0 0 24 24" width="15" height="15">
+        <g fill="none" stroke="#10A37F" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="12" cy="5.8" r="1.4" fill="#10A37F" stroke="none"/>
+          <circle cx="17.6" cy="9" r="1.4" fill="#10A37F" stroke="none"/>
+          <circle cx="17.6" cy="15" r="1.4" fill="#10A37F" stroke="none"/>
+          <circle cx="12" cy="18.2" r="1.4" fill="#10A37F" stroke="none"/>
+          <circle cx="6.4" cy="15" r="1.4" fill="#10A37F" stroke="none"/>
+          <circle cx="6.4" cy="9" r="1.4" fill="#10A37F" stroke="none"/>
+          <path d="M12 5.8 L17.6 9 L17.6 15 L12 18.2 L6.4 15 L6.4 9 Z"/>
+        </g>
+      </svg>
+    </span>
   </header>
 
   <div id="worker" style="color:var(--dim);font-size:11px;display:flex;align-items:center;gap:6px">
