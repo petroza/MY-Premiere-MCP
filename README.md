@@ -35,6 +35,8 @@ Příklady zadání (panel v Premiere, `claude` v terminálu, Claude Desktop):
 - „Tady jsou 3 kamery a zvuk od zvukaře – sestříhej to automaticky podle toho, kdo mluví."
 - „Hodinový materiál: udělej osnovu a navrhni střih lokálně, ať nepálíme kredity."
 
+Zadání jde i nadiktovat – tlačítko 🎤 v panelu nahraje řeč a lokálně ji přepíše (stejný Whisper jako na video, žádný cloud).
+
 ### Dlouhý materiál a kredity
 1. `transcribe_media` + `diarize_media` / `speakerTracks` + `rename_speakers` – vše lokálně.
 2. `analyze_transcript` – lokální LLM vrátí **kompaktní osnovu** (kapitoly, shrnutí, nejsilnější a slabé věty).

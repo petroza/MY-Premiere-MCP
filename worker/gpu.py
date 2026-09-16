@@ -93,8 +93,12 @@ def whisper(name: str | None = None):
 
     w = CONFIG["whisper"]
     name = name or w["model"]
-    local = model_path("whisper")
-    source = str(local) if name == w["model"] and local.exists() else name
+    if name in ("large-v3-czech", "czech", "cs"):
+        czech = model_path("whisperCzech")
+        source = str(czech) if czech.exists() else name
+    else:
+        local = model_path("whisper")
+        source = str(local) if name == w["model"] and local.exists() else name
     key = (source, w["device"], w["compute"])
     with _lock:
         if _whisper is not None and _whisper_key == key:

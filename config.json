@@ -14,6 +14,7 @@
   },
   "models": {
     "whisper": "models/whisper-large-v3",
+    "whisperCzech": "models/whisper-large-v3-czech",
     "whisperDownloadRoot": "models/whisper-extra",
     "segmentation": "models/diarization/sherpa-onnx-pyannote-segmentation-3-0/model.onnx",
     "embedding": "models/diarization/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
