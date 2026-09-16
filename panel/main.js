@@ -474,6 +474,11 @@
       if ($('pokracovat').checked && sessionId) args.push('--resume', sessionId);
     } else {
       args = ['exec', '--json', '--skip-git-repo-check',
+        // Bez tohohle Codex v neinteraktivním exec režimu MCP volání vždy zamítne
+        // ("MCP tool call requires approval, but approval policy is never") - není
+        // se koho zeptat. Stejná důvěra jako u Claude (--allowedTools mcp__premiere),
+        // jen širší: tady jde o celý sandbox/shell, ne jen o tenhle MCP server.
+        '--dangerously-bypass-approvals-and-sandbox',
         '-c', 'mcp_servers.premiere.command="node"',
         '-c', 'mcp_servers.premiere.args=["' + SERVER_JS + '"]',
         '-'];
