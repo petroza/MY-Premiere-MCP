@@ -718,6 +718,10 @@ tool(
     charsPerLine: z.number().int().optional().describe('Max znaků na jeden řádek titulku (výchozí 40)'),
     lines: z.union([z.literal(1), z.literal(2)]).optional().describe('Počet řádků titulku: 1 nebo 2 (výchozí 2)'),
     maxSecPerCue: z.number().optional().describe('Max délka jednoho titulku v s (výchozí 6)'),
+    leadIn: z
+      .number()
+      .optional()
+      .describe('O kolik s předsadit začátek titulku dopředu (kompenzace typického zpoždění Whisperu u začátku slova po tichu; výchozí 0.12, 0 = vypnuto)'),
     force: z
       .boolean()
       .optional()
@@ -784,6 +788,18 @@ tool(
       }
     }
     if (cur) cues.push(cur);
+
+    // Whisper hlásí začátek slova po tichu typicky s malým zpožděním oproti skutečnému
+    // začátku řeči (běžná vlastnost ASR zarovnání) – titulek proto předsadíme dopředu,
+    // ale nikdy před konec předchozího titulku (aby se nepřekrývaly).
+    const leadIn = a.leadIn ?? 0.12;
+    if (leadIn > 0) {
+      let prevEnd = 0;
+      for (const c of cues) {
+        c.t0 = Math.max(prevEnd, c.t0 - leadIn);
+        prevEnd = c.t1;
+      }
+    }
 
     const srtLines = [];
     cues.forEach((c, i) => {

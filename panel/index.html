@@ -13,6 +13,11 @@
   .dot { width:9px; height:9px; border-radius:50%; background:var(--dim); flex:none; }
   .dot.on { background:var(--ok); } .dot.err { background:var(--err); }
   #stav { color:var(--dim); }
+  .pulse { display:none; width:8px; height:8px; border-radius:50%; flex:none; }
+  .pulse.on { display:inline-block; animation: pulse-anim 1s ease-in-out infinite; }
+  @keyframes pulse-anim { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:.35; transform:scale(1.7); } }
+  #aiPulse.on { background:var(--accent); }
+  #workerPulse.on { background:var(--ok); }
   .row { display:flex; gap:6px; align-items:center; }
   textarea { width:100%; min-height:74px; resize:vertical; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px; font:inherit; }
   select, button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:inherit; }
@@ -30,9 +35,13 @@
     <span id="dot" class="dot"></span>
     <h1>MY Premiere MCP</h1>
     <span id="stav">startuji…</span>
+    <span id="aiPulse" class="pulse" title="AI (Claude/Codex) pracuje"></span>
   </header>
 
-  <div id="worker" style="color:var(--dim);font-size:11px">Worker: …</div>
+  <div id="worker" style="color:var(--dim);font-size:11px;display:flex;align-items:center;gap:6px">
+    <span id="workerPulse" class="pulse" title="Lokální Worker pracuje"></span>
+    <span id="workerText">Worker: …</span>
+  </div>
 
   <textarea id="prompt" placeholder="Např.: Přepiš zvuk aktivní sekvence a udělej novou sekvenci jen s větami o cenách, ať to dává smysl. Vyhoď přeřeknutí a dlouhé pauzy."></textarea>
   <div class="row">

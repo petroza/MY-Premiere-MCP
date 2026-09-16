@@ -63,15 +63,17 @@
           var running = jobs.filter(function (j) { return j.status === 'running'; })[0];
           var queued = jobs.filter(function (j) { return j.status === 'queued'; }).length;
           var q = queued ? ' · ve frontě ' + queued : '';
-          $('worker').textContent = running
+          $('workerText').textContent = running
             ? 'Worker: ' + running.type + ' ' + Math.round((running.progress || 0) * 100) + ' % – ' + (running.message || '') + q
             : 'Worker: připraven' + q;
+          $('workerPulse').classList.toggle('on', !!running);
         } catch (e) {
-          $('worker').textContent = 'Worker: neznámý stav';
+          $('workerText').textContent = 'Worker: neznámý stav';
+          $('workerPulse').classList.remove('on');
         }
       });
     });
-    req.on('error', function () { $('worker').textContent = 'Worker: neběží (spustí se při první úloze)'; });
+    req.on('error', function () { $('workerText').textContent = 'Worker: neběží (spustí se při první úloze)'; $('workerPulse').classList.remove('on'); });
     req.on('timeout', function () { req.destroy(); });
     req.end();
   }
@@ -259,6 +261,7 @@
     if (!child) return;
     try { cp.execSync('taskkill /pid ' + child.pid + ' /T /F', { windowsHide: true }); } catch (e) {}
     child = null;
+    $('aiPulse').classList.remove('on');
   }
 
   function shortInput(obj) {
@@ -335,6 +338,7 @@
     $('run').disabled = true;
     $('undo').disabled = false; // nová akce = čerstvá historie, undo zámek z předchozí akce už neplatí
     $('stop').disabled = false;
+    $('aiPulse').classList.add('on');
 
     var useShell = /\.(cmd|bat)$/i.test(exe);
     child = cp.spawn(exe, args, { cwd: ROOT, windowsHide: true, shell: useShell, env: process.env });
@@ -365,6 +369,7 @@
       child = null;
       $('run').disabled = false;
       $('stop').disabled = true;
+      $('aiPulse').classList.remove('on');
     });
   }
 
