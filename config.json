@@ -1,0 +1,48 @@
+{
+  "port": 7880,
+  "python": [".venv/Scripts/python.exe"],
+  "worker": {
+    "port": 7881,
+    "python": ".venv/Scripts/python.exe"
+  },
+  "whisper": {
+    "model": "large-v3",
+    "device": "cuda",
+    "compute": "float16",
+    "language": "cs",
+    "beamSize": 5
+  },
+  "models": {
+    "whisper": "models/whisper-large-v3",
+    "whisperDownloadRoot": "models/whisper-extra",
+    "segmentation": "models/diarization/sherpa-onnx-pyannote-segmentation-3-0/model.onnx",
+    "embedding": "models/diarization/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx",
+    "llm": "models/llm/gemma3-12b-Q4_K_M.gguf",
+    "llmVision": "models/llm-vision/Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+    "llmVisionMmproj": "models/llm-vision/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf"
+  },
+  "llm": {
+    "server": "tools/llama.cpp/llama-server.exe",
+    "port": 7882,
+    "nCtx": 12288,
+    "gpuLayers": 99,
+    "chunkChars": 3200,
+    "temperature": 0.1
+  },
+  "llmVision": {
+    "server": "tools/llama.cpp/llama-server.exe",
+    "port": 7883,
+    "nCtx": 8192,
+    "gpuLayers": 99,
+    "temperature": 0.2
+  },
+  "diarization": {
+    "threads": 6,
+    "threshold": 0.5,
+    "similarity": 0.55
+  },
+  "correctionsFile": "corrections.txt",
+  "cacheRoot": "cache",
+  "cacheDir": "cache/transcripts",
+  "defaultExportPreset": "C:/Program Files/Adobe/Adobe Premiere Pro 2026/MediaIO/systempresets/4E49434B_48323634/01 - Match Source - High bitrate.epr"
+}

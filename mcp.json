@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "premiere": {
+      "command": "node",
+      "args": ["O:/MYpremiereMCP/server/index.js"]
+    }
+  }
+}

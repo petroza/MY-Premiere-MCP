@@ -1,0 +1,177 @@
+# HANDOFF – MY Premiere MCP (pro navazujícího Claude)
+
+> Stav k 2026-09-16 (dopoledne). Uživatel (Petr) píše česky, odpovídej česky, stručně. Pracuj v `O:\MYpremiereMCP`.
+> Začni: přečti tenhle soubor, `README.md` a `CLAUDE.md`, pak `node scripts/smoke.mjs` a `worker_status`.
+> **Claude CLI je teď přihlášené** (`claude auth status` → loggedIn true, účet petr.zavorka@nova.cz, org TV Nova) – panel i `panel-run.mjs` fungují end-to-end, žádný obchvat přes přímou MCP session není potřeba.
+
+## 1. Cíl uživatele
+1. **Střih v Adobe Premiere Pro přes Claude nebo Codex (GPT) podle promptu**, i u **hodinového videa**, s porozuměním **českému dialogu** (co kdo říká, aby střih dával smysl).
+2. **Automatický střih více kamer**: typicky kamera na každého hosta + celek, přepínání podle toho, kdo mluví.
+3. **Šetřit kredity Claude**: těžké věci lokálně (Worker), Claude dostává jen kompaktní osnovu.
+
+## 2. Závazné preference uživatele
+- **Žádná závislost na Ollamě.** Všechny modely a nástroje **ve složce aplikace** (`models/`, `tools/`, `.venv`).
+- Netestovat na WINREC nahrávkách – **testovat na videích z internetu** (volné licence, CC). Před stažením souboru uveď název, zdroj, velikost a nech si to potvrdit.
+- Instalace/testování dělej sám, ale nic destruktivního v uživatelových projektech (jeho projekt `C:\AI porad\test.prproj` neměnit; testuje se v `O:\MYpremiereMCP\test\MCP_test.prproj`).
+- Uživatelovy repo jako inspirace: `petroza/PZ_AI_DAB_ALL` (ASR), `petroza/PZ_VIDEO_TAG` (lokálně `O:\PZ_VIDEO_TAG`).
+
+## 3. Architektura
+```
+Claude/Codex ──stdio──► server/index.js (MCP "premiere", 40 nástrojů)
+                           ├─HTTP 127.0.0.1:7880 + token ─► CEP panel com.pz.premieremcp (panel/main.js) ─► panel/host/host.jsx (ExtendScript ES3)
+                           └─HTTP 127.0.0.1:7881 + token ─► worker/server.py (fronta úloh, .venv Python 3.11)
+                                                              ├ asr.py      faster-whisper large-v3 CUDA (models/whisper-large-v3)
+                                                              ├ diarize.py  "chunks": CAM++ otisky kousků vět + vlastní shlukování; záloha sherpa pyannote
+                                                              ├ audiosync.py FFT korelace obálky → offsety kamer
+                                                              ├ frame.py    get_frame/describe_frame – snímek videa (+ lokální popis přes vision LLM)
+                                                              ├ analysis.py heuristiky + llama-server (tools/llama.cpp b10984, models/llm/gemma3-12b-Q4_K_M.gguf, port 7882)
+                                                              └ gpu.py      jen jeden model na GPU (Whisper XOR Gemma3 XOR Qwen3-VL vision, port 7883), úklid osiřelých llama-server
+server/multicam.js – čistá logika přepínání kamer (planRuns, multicamClips)
+```
+- Token: `%APPDATA%\MYpremiereMCP\token.txt` (sdílí panel i Worker). Worker odmítá požadavky s hlavičkou Origin.
+- `server/index.js` závisí i na npm `undici` (přidáno 2026-09-15) – vlastní `fetch`/`Agent` s velkorysým `headersTimeout`/`bodyTimeout` pro dlouhé `buildTimeline`/`exportSequence` volání (viz sekce 5 a 7).
+- MCP server Worker sám spustí a **restartuje, když má starší kód** (`/health` → `codeStamp`, `pid`).
+- Cache: `cache/transcripts|diarization|sync|analysis|jobs` (+ `index.json` podle cesty), logy `cache/worker.log`, `cache/llama-server.log`.
+- Registrace MCP: Claude Code (user scope, příkaz `node`), Claude Desktop config, Codex `~/.codex/config.toml` (zálohy `.bak-*`).
+- Panel v Premiere: Okno > Rozšíření > MY Premiere MCP (junction z `%APPDATA%\Adobe\CEP\extensions\com.pz.premieremcp`). Panel umí spustit `claude -p` / `codex exec` a ukazuje stav Workeru. `panel/.debug` = DevTools na 8098.
+
+## 4. Klíčové soubory
+| Soubor | Co |
+|---|---|
+| `server/index.js` | MCP nástroje, klient Workeru (`runJob`, `ensureWorker`), most do Premiere (`premiere()`) |
+| `server/multicam.js` | pravidla přepínání (minShot 1.8, preRoll 0.3, maxShot 14 → prostřih, překryv/ticho → celek) |
+| `panel/host/host.jsx` | ExtendScript API: buildSequence, buildTimeline, removeRanges, exportSequence… |
+| `worker/*.py` | viz architektura |
+| `config.json` | porty, cesty k modelům, whisper/llm/diarizace (similarity 0.55) |
+| `CLAUDE.md` / `AGENTS.md` | pokyny pro agenta (postup střihu, dlouhý materiál, multicam) |
+| `install.ps1` | kompletní instalace do složky aplikace (na čistém PC zatím nespuštěno) |
+| `corrections.txt` | slovník oprav přepisu |
+| `worker/frame.py` | `get_frame` – vytáhne snímek videa (JPEG) pro obrazovou analýzu (Claude vidění i budoucí lokální VLM) |
+| `EXTERNI_AI_INSTRUKCE.md` | statická šablona pro externí AI (ChatGPT apod.) – formát přepisu a požadovaný výstupní JSON |
+
+## 5. Ověřeno (vše prošlo)
+- `node scripts/smoke.mjs` → 33 nástrojů; `node scripts/test-multicam-unit.mjs` → 10/10; `scripts/test_repair_json.py` OK.
+- `node scripts/test-worker.mjs status transcribe diarize sync names multicam analyze` (syntetický rozhovor `test/multicam`, gt.json):
+  sync kamer 0 ms, diarizace 91,7 %, mikrofony 100 %, správná kamera 99,7 %.
+- `node scripts/test-worker-restart.mjs` → restart při starém kódu, žádný osiřelý llama-server.
+- Premiere živě: `test-premiere.mjs` (build, pauses, markers, remove s ripple), `verify-multicam.mjs` (bez mezer, sync ±půl snímku, jen master audio), `test-export.mjs` (MP4 1080p).
+- **Skutečné video** `test/podcast/Diskuse1.mp4` (archive.org, CC BY-NC-ND, 26:39): přepis 116 s, diarizace 15 s → 3 mluvčí (S3 moderátor, S2 a S1 panelisté – dává smysl), osnova 112 s, `plan_edit_local` 5 min → sekvence + export 5:15 (`test-podcast2.mjs`).
+- **End-to-end přes agenta** (2026-09-15): `claude auth login` proveden uživatelem, `claude auth status` → loggedIn true. Ověřeno dvěma cestami:
+  1. Přímo v Claude Code session (`mcp__premiere__*` nástroje) – agentní (ne lokální LLM) střih podle obsahu na `Diskuse1.mp4`: přečten `get_outline` + `get_transcript`, ručně vybráno 16 vět → `build_sequence_from_transcript` → 3:37, 14 úseků, bez varování, ověřeno `get_sequence` (bezešvé navazování).
+  2. Reálně přes panel: `node scripts/panel-run.mjs "zadání"` (DevTools most, `panel/.debug`) spustí skutečný `claude` proces stejně jako tlačítko „Spustit“ v panelu – ověřovací dotaz na aktivní sekvenci zodpovězen správně (15 s, $0.57).
+- **Skutečný multicam materiál** (2026-09-15): **AMI Meeting Corpus** (groups.inf.ed.ac.uk/ami, CC BY 4.0) – schůzka `ES2002a`, 21:12, 4× kamera na účastníka (bez zvuku) + hlavní mix + 4× oddělený headset mikrofon, staženo do `test/ami/amicorpus/ES2002a/`.
+  - `transcribe_media` + `speakerTracks` (4 headsety): 176 vět, 2081 slov za 61 s (RTF ~20×), správné rozlišení mluvčích.
+  - `build_multicam_sequence`: 171 záběrů/21 min bez varování; s odstraněním celků a pauz (`ranges` = řeč bez ticha >0,7 s, `maxShot` vypnuté) 138 záběrů/12:15; filtr jen na mužské mluvčí (`ranges` jen jejich intervaly) 69 záběrů/5:44 – uživatelem vizuálně potvrzeno jako správné.
+  - **Kamera↔mluvčí mapování NENÍ fixní konvence** (Closeup1≠vždy stejná osoba) – liší se schůzku od schůzky, musí se vzít z dokumentace/metadat (u AMI `groups.inf.ed.ac.uk/ami/corpus/signals.shtml`, tabulka `Role,Cam,Chan`), ne odhadovat. Špatný odhad se projevil přesně tak, jak by to poznal uživatel: „mluví, ale kamera není na něj“.
+  - **Kamery bez vlastního zvuku** (samostatný zvuk/obraz systém, žádný scratch audio na kameře) → `sync_media`/auto-sync v `build_multicam_sequence` na nich spadne (potřebují zvuk na obou stranách pro FFT korelaci); řešení: zadat `offset` ručně (u AMI 0, signály sdílejí společnou časovou osu ze zdroje). Opraveno v `worker/audiosync.py` (viz níže) – dřív kryptický `IndexError`, teď jasná hláška.
+- **Zátěž ~1 h / 800+ záběrů** (2026-09-15, večer): syntetickým opakováním reálného AMI přepisu (5× 21 min = 61:16, 810 naplánovaných záběrů, 1385 klipů) se narazilo na **skutečný a opravený bug**, ne jen teoretické riziko:
+  - `build_multicam_sequence` na tomhle rozsahu spadl s `UND_ERR_HEADERS_TIMEOUT` po ~6 minutách, přestože kód nastavuje `AbortSignal.timeout(1 810 000 ms)` (~30 min). Příčina: Node vestavěný `fetch` (undici) má **defaultní `headersTimeout`/`bodyTimeout` 300 000 ms**, který `AbortSignal` nepřebíjí. Stejný defaultní limit (`server.requestTimeout` 300 000 ms) měl navíc i panelův vlastní `http.createServer` na straně přijímače.
+  - Oprava: `server/index.js` teď používá `fetch`/`Agent` **z npm balíčku `undici`** (přidán jako závislost) s vlastním `headersTimeout`/`bodyTimeout` 7 200 000 ms – POZOR, globální vestavěný `fetch` nejde takhle nakonfigurovat a `dispatcher` z npm `undici` je **nekompatibilní** s vestavěnou verzí (`InvalidArgumentError: invalid onRequestStart method`), proto se musí použít i `fetch` ze stejného balíčku, ne global. `panel/main.js` má nově `server.requestTimeout = 0; server.headersTimeout = 0;` (po úpravě nutný reload panelu/stránky, ne jen `es.mjs --reload`).
+  - Po opravě: **1385/1385 klipů, 61:16, bez varování, ~580–660 s** (real Premiere build, ne dry run). To je ověřený reálný výkon pro hodinový multicam střih – úkol „zátěž 1 h“ z předchozí verze handoffu je tím hotový.
+  - Zkusil jsem i domnělou optimalizaci `findClipAt` v `host.jsx` (lineární scan od začátku → od konce, O(n²)→O(n) pro typický případ). **Neprokázalo se zrychlení** (658 s vs. 580 s baseline, v mezích šumu) – skutečné dno je zjevně přímo v Premiere API (`overwriteClip`/`setInPoint`/`setOutPoint` s verify-readback), ne v JS skenu. Oprava v kódu zůstala (je bezpečná, nikdy nezhorší korektnost), ale nečekej od ní měřitelný přínos – viz otevřený úkol #6.
+  - Regresně ověřeno po zásahu do `server/index.js`, `panel/main.js`, `host.jsx`: `smoke.mjs`, `test-multicam-unit.mjs` (10/10), `test-premiere.mjs status build pauses markers remove` – vše prošlo.
+- **`analyze_transcript`/`plan_edit_local` na anglickém obsahu** (2026-09-15, poprvé testováno jinak než česky, na `ES2002a.Mix-Headset.wav`): našel a opravil se **skutečný, opakovaně reprodukovatelný bug**.
+  - `worker/gpu.py chat_json()` nekontroloval, že model (gemma3 12B) fakticky vrátil JSON **objekt** – u posledního chunku (5/5, delší/composité věty) vrátil validní JSON, ale ne objekt (`{"chapters":...}`), takže `data.get(...)` v `worker/analysis.py` spadlo na `AttributeError: 'str' object has no attribute 'get'`. Navíc `_fix_chapters()` neodchytávala `AttributeError`, když položka v `chapters` sama nebyla dict.
+  - Oprava: `chat_json()` teď po parsování ověří `isinstance(result, dict)` a při nesouladu vrátí `{}` (degraduje na prázdný chunk místo pádu); `_fix_chapters()` odchytává i `AttributeError`.
+  - Po opravě: **15 kapitol, 48 slabých vět** – osnova dává smysl (shrnutí česky i pro anglický zdroj, podle promptu). `plan_edit_local` s instrukcí „3minutová verze o ceně a mezinárodním prodeji“ → 24 vět, chytře vybrané podle skóre kapitol (K7/K9/K14 = jádro), **183,6 s vs. cíl 180 s** (přesnost ~2 %). Regresně ověřeno `test_repair_json.py` (4/4 OK).
+- **Reálné střihové zadání přes panel/CLI** (2026-09-16, `node scripts/panel-run.mjs`, ne přímá MCP session): zadání „udělej 2minutovou verzi o tom, jak tým řeší cenu dálkového ovládání“ na `ES2002a.Mix-Headset.wav`. Agent sám: ověřil projekt, zkusil krátké jméno souboru u `get_outline` (chyba, protože osnova je indexovaná podle plné cesty), sám se opravil, přečetl slova v cílovém úseku, rozpoznal překryvy řeči typické pro AMI nahrávku a použil `fromWord`/`toWord` k čistému zastřižení 6 vět – **sekvence 1:58, 12 úseků, nic nesmazáno**, 140 s, $0,90. Celý postup z `CLAUDE.md` (ověř projekt → přečti CELÝ úsek → zachovej myšlenky → nová sekvence → shrň proč) proběhl bez zásahu.
+- **Zbylé netestované nástroje na AMI multicam sekvenci** (2026-09-16): `transcribe_sequence` (přepis v časech timeline, mnoho krátkých klipů ze stejného zdroje) – čitelný, správně poskládaný, bez pádu; `search_transcript` – funguje; `export_sequence` na sekvenci „TEST AMI jen muzi“ – `{"result":"No Error"}`, 46 MB, ověřená přesná délka 344,68 s (`av` v Pythonu), zvuk i obraz v pořádku. Žádný bug – jen chybějící pokrytí testy.
+- **Diarizace na reálné 4mluvčí konverzaci** (2026-09-15, `diarize_media` na `ES2002a.Mix-Headset.wav`, `numSpeakers:4`, porovnáno slovo po slovu proti ověřenému přepisu z mikrofonů): metoda „chunks“ **rozlišila jen 2 skutečné shluky místo 4** – Laura (1150/2081 slov) a Andrew (771 slov) dostaly svůj shluk správně, ale **David (87 slov) a Greg (39 slov) se do žádného vlastního shluku netrefili ani jednou** – jejich řeč pohltily shluky Laury/Andrewa. Nejlepší možné přiřazení shluků na mluvčí vychází na 92,3 % slov, ale to číslo je zavádějící (tažené jen dvěma nejmluvnějšími) – reálně diarizace **úplně minula 2 ze 4 lidí**. Potvrzuje to už zapsané podezření u `worker/diarize.py` (`_chunks`/`_smooth`/`similarity`) – tichejší/méně mluvící účastníci mají tendenci se ztratit v shluku dominantního mluvčího. Neladil jsem parametry (`similarity` 0,55, threshold) – bez jasné poptávky uživatele a bez rizika rozbití toho, co funguje na syntetickém testu (99,7 % správná kamera). Přepis po testu obnoven zpět na mikrofonní jména (`transcribe_media force:true` + `rename_speakers`), diarizace nic nezanechala v produkčních sekvencích.
+
+## 5b. Srovnání s ostatními (2026-09-16) a rozhodnutí
+
+Uživatel se zeptal, jestli jsem porovnal náš přístup s tím, jak to řeší jinde – neporovnal jsem dřív, teď ano (web research). Zjištění a rozhodnutí:
+
+1. **Architektura CEP panel + ExtendScript most** – odpovídá tomu, jak to dělají i jiné veřejné Premiere MCP servery (na GitHubu existuje víc podobných projektů). Není to zastaralý nápad, je to prakticky jediná cesta, protože Premiere nemá vlastní externí scripting API (na rozdíl od DaVinci Resolve/Final Cut, kde MCP servery jdou přímo na nativní API bez CEP mostu).
+   - **Aktualizace 2026-09-16 (ověřeno přímo z Adobe zdrojů, ne agregátorů):** to "časově naléhavé" varování z předchozí verze bylo přehnané – zdroj byl webový research agent, který citoval nepotvrzené komunitní odhady. Šel jsem přímo na `developer.adobe.com/premiere-pro/` a `github.com/Adobe-CEP/CEP-Resources`: **Adobe nikde nepublikovalo konkrétní datum konce podpory CEP.** Adobe dev stránka jen říká "UXP is the next generation of APIs, for Premiere v25.6 and beyond" (směr, ne deadline), Adobe-CEP repo nemá žádné oznámení o ukončení. To komunitní vlákno o "CEP/UXP roadmap", které jsem dřív citoval jako zdroj "asi rok" – je to **nezodpovězená otázka uživatele**, ne odpověď od Adobe; zmínka "2026" tam byla jen dohad tazatele. **Závěr: sledovat vývoj (UXP je jasně budoucí směr), ale není to akutní požár – žádný ohlášený deadline neexistuje.** Panel v Premiere 26.0.1 funguje bez problémů.
+2. **Pravidlová logika přepínání kamer** ("kdo mluví → ten je na detailu, ticho/překryv → celek, dlouhý monolog → prostřih") – přesně tohle dělá i Descript (Automatic Multicam), Riverside.fm i komerční Premiere pluginy (AutoCut Angles, Autopod). Žádný z nich nepoužívá pro VÝBĚR záběru trénovaný model – jen detekci aktivního mluvčího ze zvuku, stejně jako my. **Rozhodnutí: neměnit, je to zavedený standard.**
+3. **Diarizace (CAM++ embeddingy + vlastní shlukování)** – náš pozorovaný problém (tišší mluvčí zaniknou v shluku dominantního) je **známá slabina prostého shlukování**. Zavedená oprava z výzkumu je **VBx** (bayesovské shlukování embeddingů) místo tvrdého prahování podobnosti; aktuální open-source špička je DiariZen (segmentace + VBx + PLDA). CAM++ jako embedding model samotný je OK (konkurenceschopný, rychlejší než ECAPA-TDNN) – problém je jen v kroku shlukování. **Rozhodnutí: neimplementovat teď (VBx je netriviální, bez ověřovacích dat riziko převažuje přínos) – zůstat u doporučení preferovat `speakerTracks`, ale zapsat si VBx/DiariZen jako konkrétní budoucí vylepšení, kdyby uživatel jednou chtěl řešit fakt spolehlivou diarizaci bez oddělených mikrofonů.**
+4. **Gemma 3 12B pro strukturovaný JSON výstup** – vyšla Gemma 4 (duben 2026, i 12B varianta), ale **stejný bug s nevalidním JSON objektem hlásí lidi i na Gemma 4** (je to rodová vlastnost Gemma modelů přes llama.cpp/vLLM/ollama, ne verzní chyba). Skutečná oprava není "vyměnit model", ale **gramaticky vynutit JSON schéma** (`response_format: json_schema` / GBNF), což `llama-server` (naše verze b10984) **umí a ověřil jsem to živě**. **Rozhodnutí a provedeno hned:** `worker/gpu.py chat_json()` teď bere volitelný `schema` parametr a posílá `json_schema` misto `json_object`; `worker/analysis.py` má schémata pro všechna 3 volání LLM (kapitoly/weak, skóre kapitol, výběr vět). Ověřeno živě – `analyze_transcript` i `plan_edit_local` fungují čistě, bez spoléhání na záchrannou síť po pádu. Gemma 3→4 upgrade (nový ~8GB download) zatím neřešit, benefit je nejistý a náš skutečný problém to neřešilo.
+
+## 5c. Obrazová analýza, undo, externí AI most (2026-09-16 dopoledne)
+
+Uživatel chtěl: 1) obrazovou analýzu (Claude i lokální vidění) pro párování kamera↔mluvčí, 2) tlačítko zpět v panelu, 3) možnost exportovat analýzu do souboru a nechat střih navrhnout externí AI (ChatGPT, neomezené tokeny) přes soubor.
+
+- **`get_frame` nástroj** (nový, `worker/frame.py` + `server/index.js`) – vytáhne snímek videa v daném čase, vrátí ho jako obrázek (MCP image content). Cestou nalezen a opravený **skutečný bug**: `cv2.imwrite` na Windows neumí Unicode cesty (rozsype diakritiku v názvu souboru – testováno na `Špidla_EU...mp4`) → přepsáno na `cv2.imencode` + `Path.write_bytes()`.
+  - **Ověřeno naživo end-to-end** přes `panel-run.mjs` (fresh `claude -p`, ne přímá session): agent sám zavolal `get_frame`, podíval se na snímek a správně popsal záběr (statický širák, tři lidé, projekce na pozadí, bez detailu) – přesně jako moje ruční kontrola. $0,50/dotaz.
+  - **Lokální vidění – HOTOVO a funkční.** Stažen **Qwen3-VL-4B-Instruct** (Q4_K_M, 2,5 GB + mmproj Q8_0, 454 MB; huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF, Apache 2.0) do `models/llm-vision/`. Náš `llama-server` (build b10984) **Qwen3-VL podporuje bez problémů** (ověřeno přímým spuštěním – model se načte za ~2 s). Zapojeno do `worker/gpu.py`: `ensure_vision_llm()` + `describe_image()`, GPU sdílení rozšířeno na **tři modely** (Whisper XOR Gemma3-text XOR Qwen3-VL-vision – ověřeno obousměrně, `_free_vision()`/`_free_llm()`/`_free_whisper()` se navzájem správně vytěsňují). Nový worker job `describe_frame` (snímek + lokální popis v jednom), MCP nástroj `describe_frame`. **Ověřeno naživo přes `panel-run.mjs`**: 16 s, $0,093 (jen režie volání nástroje, samotná inference je zdarma/lokální, ~0,8 s), popis přesně odpovídal tomu, co viděl Claude vidění i ruční kontrola ("tři muži za stolem, projekce na pozadí, mírně rozostřené"). `config.json` má novou sekci `llmVision` (port 7883) a `models.llmVision`/`models.llmVisionMmproj`. `install.ps1` (krok 6b/7) stahuje model automaticky na čistém PC.
+- **Undo v panelu** – `qe.project.undo()` (QE DOM, nedokumentované, ale funkční – ověřeno `typeof` před použitím) zapojeno jako `api.undo` v `host.jsx`, MCP nástroj `undo`, a přímé tlačítko **„↶ Zpět"** v panelu (bez volání AI, zdarma, přes `evalQueued` primo).
+- **Přepínač "nástroje"** v panelu – technický log (`⚙ ToolSearch`, volání nástrojů) je defaultně **skrytý** (CSS `#out:not(.show-tools) .tool`), zaškrtávátko ho zpřístupní. Uživatel si to vyžádal po zhlédnutí zbytečně technického logu.
+- **Export/import pro externí AI** (ChatGPT apod., "záložní varianta"):
+  - `export_analysis(path, output?)` – uloží osnovu + celý přepis (s indexy slov) do jednoho `.md` souboru vedle zdroje (`<zdroj>.analyza.md`). Ověřeno: 38 KB, čitelné, správný formát.
+  - `build_from_plan(planFile, source, name?)` – načte JSON `{"name":..,"picks":[..]}` ze souboru (i s okolním textem, vezme první `{...}` blok) a postaví z něj sekvenci stejnou cestou jako `build_sequence_from_transcript`. Ověřeno živě – reálná sekvence v Premiere.
+  - `EXTERNI_AI_INSTRUKCE.md` v kořeni projektu – statický text pro vložení do ChatGPT (formát přepisu, pravidla výběru, přesný výstupní JSON formát).
+  - Panel: sbalená sekce "Záložní varianta: jiná AI" s tlačítky **Otevřít instrukce** / **Vzor: exportovat analýzu** / **Vzor: sestříhat podle plánu** (vyplní prompt šablonou, uživatel doplní cestu a klikne Spustit – nejde o přímý bypass agenta, protože export/import logika žije v `server/index.js`, ne v `host.jsx`, takže panel na ni nemá přímý HTTP most jako na ExtendScript; cena za jedno mechanické volání je ale jen ~$0,10, nevadí to).
+- **`START.bat`** v kořeni – zahřeje Worker na pozadí + spustí Premiere, jedno kliknutí.
+- Regrese po všech změnách: `smoke.mjs` (40 nástrojů), `verify-host.mjs`, `test-multicam-unit.mjs` (10/10), `test_repair_json.py` (4/4) – vše OK. Živě ověřeno i `analyze_transcript` (Gemma3) hned po použití vision modelu – GPU vytěsňování funguje obousměrně.
+
+## 5d. Další reálný test (2026-09-16, dopoledne) – studiové video, diarizace funguje
+
+Nový soubor `tncz-TIT_2026-06-16_naprimo_liberec.mp4.mp4` (42 min, TN Live "Napřímo" – předvolební debata o primátora Olomouce; název souboru zavádí, obsah je o Olomouci, ne Liberci). Celý pipeline (transcribe → analyze → plan_edit_local → build) bez chyby, 50 kapitol, 2min sestřih "nejostřejší střety" → 16 úseků, cíl trefen na 2,6 %.
+
+- **Diarizace na 3 mluvčích – tentokrát skvěle funguje** (`diarize_media numSpeakers:3`): časy řeči 20:34/14:57/5:09 přesně odpovídají rolím (primátorka, kandidát, moderátorka s kratšími vstupy). **Důležité upřesnění k včerejšímu zjištění (sekce 5, AMI test):** problém není v metodě "chunks" obecně, ale konkrétně ve **špatné akustice nahrávky z jedné mikrofonní room-nahrávky** (AMI). Na **studiovém zvuku s odděleným ozvučením** (TV produkce) diarizace 3 mluvčí rozliší bez problémů. Diarizace tedy NENÍ obecně nespolehlivá – jen na "nahrávka z místnosti bez oddělených mikrofonů" scénář, což potvrzuje smysl doporučení `speakerTracks`, ale neznamená to nutnost VBx pro běžné studiové nahrávky.
+- `describe_frame` správně popsal i netypický záběr (infografika s koláčovým grafem a seznamem zastupitelů, ne "mluvící hlava") – zobecňuje dobře i mimo talking-head záběry. $0,04/dotaz.
+
+## 5e. Undo – reálný bug nalezen a zmírněn (2026-09-16)
+
+Otestoval jsem `qe.project.undo()` (undo tlačítko v panelu) opakovaným klikáním na jedné testovací sekvenci. **Výsledek: nebezpečné.** Undo nepracuje na úrovni "jedna akce nástroje = jeden krok zpět", ale na úrovni jednotlivých vnitřních Premiere operací (např. samostatně nastavení in-pointu klipu). Po 7 kliknutích po sobě se klip v sekvenci **nezmizel, ale natáhl se na celý zdrojový soubor** (42 min místo původních 8,64 s) – sekvence zůstala v nekonzistentním, matoucím stavu, ne čistě vrácená zpět.
+- **Zmírnění (provedeno):** tlačítko "↶ Zpět" v panelu se po jednom použití **zamkne** (`$('undo').disabled = true`) a odemkne se, až proběhne další "Spustit" (čerstvá historie). Text u tlačítka i hláška po použití teď varují, že jde jen o jeden krok a že se má zkontrolovat výsledek v Premiere.
+- **Neopraveno zůstává:** i JEDNO kliknutí nemusí vrátit celou akci nástroje (u vícekrokových operací typu `build_sequence_from_transcript` může vrátit jen dílčí krok, ne celou sekvenci pryč). Skutečně spolehlivé řešení by potřebovalo buď `app.project.undo()` (nedostupné – ověřeno `typeof app.undo` i `app.project.undoStack` = undefined) nebo zálohování `.prproj` před destruktivními akcemi. Nezkoumal jsem to dál kvůli riziku dalšího poškození testovacích dat.
+- Testovací sekvence `TEST undo zkouska` (duration 2517.4 = rozbitá) zůstala v projektu jako doklad, neuklízel jsem ji schválně.
+
+## 5f. Iterativní upřesňování střihu s pamětí – funguje výborně (2026-09-16)
+
+Uživatel chtěl ověřit: zadám střih, pak řeknu "chybí mi tam téma X, přidej ho", agent by měl pamatovat předchozí stav a inteligentně to sloučit (ne jen mechanicky připojit), ideálně přehodnotit celou skladbu. **Otestováno naživo přes panel se zapnutým "navázat" (dvě navazující zadání, stejná session):**
+
+1. Zadání 1: „Udělej 45sekundovou verzi jen o ceně dálkového ovládání" (na `ES2002a.Mix-Headset.wav`) → sekvence 47 s, 5 úseků. Agent navíc **sám odhalil a opravil moji záměrně špatnou nápovědu** o číslech kapitol (ověřil si to v reálné osnově, nevěřil mi naslepo).
+2. Zadání 2 (navazující, stejná session): „Chybí mi tam téma rozšířených funkcí, přidej to, ať to pořád dává smysl, 45-60 s" → **agent si pamatoval předchozí sekvenci**, našel nový relevantní obsah (K12), a **nemechanicky ji rozšířil** – přehodnotil celou skladbu, **vyměnil i původní pointu za lepší**, která propojuje obě témata (cena → zdůvodnění vyšší ceny přes rozšířené funkce → ironická pointa). Nová sekvence 57,38 s, 7 úseků, původní zůstala nedotčená (nová sekvence vedle, podle konvence).
+
+**Závěr: tohle už funguje díky kombinaci `navázat` (session resume) + Claude vlastní úsudek + existující nástroje (get_transcript/get_outline) – nebylo potřeba stavět žádný nový nástroj.** Klíčové je mít v panelu "navázat" zapnuté (je defaultně) a dát agentovi jasně najevo, že jde o navazující úpravu ("přidej do sekvence, co jsi právě udělal"). Obě dodržely i pravidlo "necituj ASR chyby opraveně" z předchozí session. Cena: $0,67 + $0,20 za dva kroky.
+
+## 5g. Nativní titulky v Premiere (2026-09-16) – funguje, undokumentované API
+
+Uživatel chtěl české titulky přímo v Premiere (ne jen v přepisu). Standardní ExtendScript DOM (`Sequence`) titulky vůbec nezná (`captionTracks` je `undefined`, `for...in` je taky neukáže – ExtendScript hostitelské metody nejsou enumerable). Reflexe `seq.reflect.methods` ale odhalila skrytou metodu `createCaptionTrack`, kterou Adobe nikde nedokumentuje. Zjištěno živým zkoušením (na testovací sekvenci, ne na reálném obsahu):
+
+1. `app.project.importFiles([srtPath], true, app.project.rootItem, false)` – import .srt naimportuje soubor jako běžnou položku projektu (typ se navenek neliší).
+2. `seq.createCaptionTrack(projectItem, 0)` – **jedno volání** vytvoří v sekvenci novou titulkovou stopu (interně `DataTrackGroup`/`CaptionDataClipTrack`, 3. skupina stop vedle video/audio, v DOM nikde vidět) a **rovnou do ní vloží všechny titulky ze souboru** (`insertClip` navíc není potřeba – zkoušeno, jen by to duplikovalo). Druhý parametr `0` fungoval spolehlivě, jiné typy/hodnoty buď spadly na "Illegal Parameter type", nebo se chovaly stejně – nejde o zdokumentovaný enum, nechán `0`.
+3. Ověřeno **na úrovni .prproj XML** (ne jen "nespadlo to"): po `saveProject` dekomprimovaný `.prproj` obsahuje `CaptionCollection`/`Caption` objekty se správným českým textem (diakritika v pořádku) a časy odpovídajícími .srt.
+
+Implementováno jako nástroj `add_captions` (`server/index.js`) + `api.addCaptions` (`host.jsx`): vezme klipy aktivní/zadané sekvence, přepíše zdroje (cache), slova namapuje na **časy timeline** (stejná logika jako `transcribe_sequence`), seskupí do titulků (max ~84 znaků / 6 s / mezera >0,6 s = nový titulek), uloží `.srt` do `cache/transcripts/captions/`, zavolá `addCaptions`. Živě otestováno na `Spidla - jen on, 30s nejostrejsi` (29,2 s): 5 titulků, správný text i časy, potvrzeno v XML (`DataTrackGroup` → 1 stopa → 5 `TrackItem`).
+
+**Omezení (DOM titulky vůbec neexponuje, takže nejde je programově spravovat):** nejde zjistit, kolik titulkových stop sekvence už má, ani žádnou smazat/přepsat skriptem – opakované volání `add_captions` na stejnou sekvenci přidá další stopu navíc (starou je nutné smazat ručně v Premiere). Zapsáno do `CLAUDE.md` a popisu nástroje. Vedlejší efekt testování: testovací sekvence "Cena a rozšířené funkce ovladače (~57s)" má teď 3 nadbytečné titulkové stopy s anglicko-českým testovacím textem (z ladění metody) – neškodí (video/audio stopy nedotčené, ověřeno), ale je to vidět při otevření té sekvence v Premiere; úklid by šel jen ručně přes UI. "Spidla - jen on, 30s nejostrejsi" má z živého testování tlačítka 2 titulkové stopy (viz níže).
+
+**UI v panelu** (`index.html`/`main.js`): přímo pod hlavním řádkem tlačítek je řádek "Titulky" – select znaků/řádek (20–50, výchozí 40), select řádků (1/2, výchozí 2) a tlačítko "💬 Přidat titulky". Klik naplní prompt přesným zadáním (`add_captions` s `charsPerLine`/`lines`) a rovnou spustí agenta (stejná cesta jako ruční zadání, ne přímé volání – `add_captions` potřebuje Worker přepis, který panel sám nemá). Živě otestováno oběma směry: 40 znaků/2 řádky (`Takže ta situace, ve které jsme, tak nám / dala bezpečnost a vliv`) i 30 znaků/1 řádek (12 kratších titulků) – zalomení přesně podle nastavení (`wrapCue()` v `server/index.js`).
+
+**Bug nalezený uživatelem a opravený stejný den:** opakované testování (různé `charsPerLine`/`lines`) na jedné sekvenci vytvořilo postupně 5 titulkových stop – ale v Premiere se pořád zobrazovala jen ta úplně PRVNÍ (uživatel poslal screenshot: viditelný text neodpovídal poslednímu požadavku). Příčina nalezena v `.prproj` XML: každý `Track` uvnitř `DataTrackGroup` má vlastnost `MZ.SourceTrackState` – jen track s `state=2` je "aktivní"/zobrazovaný, u všech dalších je `0`, a Premiere tuhle vlastnost přes DOM nejde nastavit ani zjistit (data/caption stopy DOM vůbec nezpřístupňuje – potvrzeno, `seq.reflect.methods` nemá žádný getter/remover). **Řešení:** `add_captions` si teď vede vlastní evidenci (`cache/transcripts/captions/index.json`, klíč `sequenceID`) a při druhém volání na stejnou sekvenci rovnou ODMÍTNE běžet s vysvětlením a instrukcí (smazat starou "CC" stopu ručně v Premiere přes pravé tlačítko na hlavičku stopy → Delete Track), místo aby potichu vytvořil další neviditelnou stopu. Obejít jde parametrem `force: true`, ale výsledek stejně nebude vidět, dokud staré stopy nezmizí – parametr je pro případ, že uživatel už ručně uklidil. Ověřeno živě přes tlačítko v panelu: 2. klik na stejnou sekvenci nástroj správně zamítl.
+
+## 6. Otevřené úkoly (priorita)
+1. `install.ps1` otestovat na čistém prostředí (2026-09-16: statická revize proběhla, žádné chybějící pip/npm závislosti ani zjevné bugy nenalezeny – `undici`/`opencv-python-headless` se nainstalují automaticky, model `Qwen3-VL` se stáhne v kroku 6b/7 – ale skutečný běh na čistém PC pořád neproběhl). `make_long_test.py`/`transcribe-winrec.mjs` jsou WINREC-specifické (lze smazat).
+2. Diarizace: na nahrávce z místnosti (AMI) ztratily 2 tišší mluvčí úplně, ale na **studiovém zvuku funguje spolehlivě** i na 3 mluvčích (viz sekce 5d – nejde o obecnou slabinu, jen o room-recording scénář). Zavedená oprava pro room-nahrávky by byla **VBx shlukování** (sekce 5b) – netriviální, neimplementováno, a podle 5d možná ani není potřeba tak naléhavě, jak se zdálo. **Pro multicam vždy preferovat `speakerTracks`**, kdykoli je to možné.
+3. Undo je jen best-effort (5e), ale **teď existuje skutečná pojistka**: nový nástroj `backup_project` (uloží projekt + zkopíruje `.prproj` do `<projekt>/backups/` s časovým razítkem). `CLAUDE.md` instruuje zavolat ho před destruktivními nástroji. Obnova je ruční (otevřít zálohu v Premiere) – programové "restore" by bylo riskantnější než přínos. Ověřeno živě: `O:\MYpremiereMCP\test\backups\MCP_test.2026-09-16T12-00-56-572Z.prproj`, 1,2 MB, $0,05.
+4. Zvážit v `build_multicam_sequence`/multicam.js přidat volitelný parametr pro úplné vypnutí prostřihů do jiné detailní kamery při `maxShot` bez `wide` role (teď padá na první jinou kameru) – momentálně se obchází ručním `rules.maxShot` na velké číslo.
+5. CEP→UXP: ověřeno 2026-09-16, žádné oficiální datum konce podpory CEP neexistuje (sekce 5b) – sledovat, ale neřešit akutně.
+6. `overwriteClip`/`setInPoint`+`setOutPoint` (round-trip s verifikací) v `host.jsx` stojí ~0,4–0,5 s/klip – to je skutečné dno rychlosti `buildTimeline` (ne `findClipAt`). Pro opravdu velké multicam sestavy (1000+ klipů, přes 10 min) by šlo zkusit dávkové vkládání přes QE DOM nebo vynechat verify-readback v `setItemRange`, ale nesahal jsem do toho – funguje to, jen to není bleskové. Riziko regrese převažuje nad ziskem bez jasné poptávky uživatele.
+
+## 7. Důležité pasti (ověřené)
+- `exportAsMediaDirect` chce **zpětná lomítka**; H.264 MP4 preset `MediaIO\systempresets\4E49434B_48323634\01 - Match Source - High bitrate.epr`.
+- `Time.getFormatted()` u nestandardních fps vrací špatný timecode → razor čte `qe…CTI.timecode` po `setPlayerPosition`.
+- `overwriteClip` AV klipu přidá zvuk kamery → `removeLinkedAudio`; půlsnímkové offsety → dotáhnout `trackItem.end`.
+- `.venv\Scripts\python.exe` na Windows spouští podřízený interpret → zabíjet **strom** procesů (`scripts\restart-worker.ps1`).
+- Při zápisu zdrojáků **nepoužívat `\uXXXX` escapy** (Write je převede na znaky) → `String.fromCharCode`; kontrola `node scripts/verify-host.mjs`.
+- Inline `python -c`/`node -e` v PowerShellu s uvozovkami padá → skripty do souborů.
+- Po úpravě `host.jsx`: `node scripts/es.mjs --reload` (bez restartu Premiere). Po úpravě Workeru ho MCP server restartuje sám.
+- Pyannote+WeSpeaker na nahrávce z místnosti = 1 mluvčí; proto metoda „chunks“ s CAM++.
+- `worker/audiosync.py`: `decode_audio` (faster_whisper/av) na souboru bez zvukové stopy padá s kryptickým `IndexError: tuple index out of range`. Přidána `_has_audio()` kontrola → jasná hláška „Soubor nemá zvukovou stopu…“. Kamery bez zvuku nutně potřebují ruční `offset` v `build_multicam_sequence`.
+- **Node `fetch` (undici) tvrdě zabíjí spojení po 300 s** bez ohledu na `AbortSignal.timeout()` (defaultní `headersTimeout`/`bodyTimeout`), stejně tak Node `http.Server` (`requestTimeout` 300 s) na straně panelu – u dlouhých `buildTimeline`/exportů (přes 5 min) nutně padá `UND_ERR_HEADERS_TIMEOUT`, i když skript v Premiere doběhne v pořádku. Řešeno vlastním `Agent`+`fetch` z npm `undici` v `server/index.js` a `server.requestTimeout = 0` v `panel/main.js`. Detaily a čísla v sekci 5.
+
+## 8. Užitečné příkazy
+```powershell
+cd O:\MYpremiereMCP
+node scripts\smoke.mjs                        # MCP nástroje
+node scripts\test-multicam-unit.mjs           # logika kamer
+node scripts\test-worker.mjs                  # Worker + multicam (syntetika)
+node scripts\test-premiere.mjs status         # spojení s Premiere (panel musí být otevřený)
+node scripts\test-podcast2.mjs                # skutečné video end-to-end (lokálně)
+powershell -File scripts\restart-worker.ps1   # tvrdý restart Workeru
+node scripts\cdp.mjs                          # chyby panelu přes DevTools
+```

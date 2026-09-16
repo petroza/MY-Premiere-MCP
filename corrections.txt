@@ -1,0 +1,17 @@
+# =====================================================================
+#  MYpremiereMCP - SLOVNIK OPRAV PREPISU
+# =====================================================================
+#  Whisper pise ciz slova, znacky a jmena foneticky. Tady je opravis.
+#  Format:   chybne = spravne
+#   - bez ohledu na velikost pismen, jen cela slova
+#   - soubor se cte pri kazdem prepisu (smaz cache nebo pouzij force)
+# ---------------------------------------------------------------------
+
+ConfiY = ComfyUI
+konfiuj = ComfyUI
+konfiujem = ComfyUI
+komfy = Comfy
+konfi = Comfy
+porše = Porsche
+inijak = Enyaq
+premiéra = Premiere

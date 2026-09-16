@@ -1,0 +1,21 @@
+# závislosti a nástroje (stáhne/nainstaluje install.ps1)
+node_modules/
+.venv/
+tools/
+
+# stažené modely (viz install.ps1, README tabulka modelů)
+models/
+
+# běhová cache (přepisy, diarizace, analýzy, joby, logy)
+cache/
+
+# testovací data a Premiere projekt (velké, generované/stažené skripty, mění se při každém běhu)
+test/
+
+# lokální stav nástrojů
+.claude/
+panel/.debug
+*.bak-*
+*.log
+__pycache__/
+*.pyc

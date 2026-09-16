@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<title>MY Premiere MCP</title>
+<style>
+  :root { --bg:#1d1d1d; --panel:#262626; --line:#353535; --text:#d6d6d6; --dim:#8a8a8a; --accent:#6f8cff; --ok:#43c26b; --err:#e0584f; --tool:#c9a54a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:12px/1.45 "Segoe UI",Tahoma,sans-serif; }
+  body { display:flex; flex-direction:column; padding:8px; gap:8px; }
+  header { display:flex; align-items:center; gap:8px; }
+  header h1 { font-size:13px; margin:0; font-weight:600; flex:1; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--dim); flex:none; }
+  .dot.on { background:var(--ok); } .dot.err { background:var(--err); }
+  #stav { color:var(--dim); }
+  .row { display:flex; gap:6px; align-items:center; }
+  textarea { width:100%; min-height:74px; resize:vertical; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px; font:inherit; }
+  select, button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:inherit; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; }
+  #out { flex:1; overflow:auto; background:#151515; border:1px solid var(--line); border-radius:4px; padding:6px; white-space:pre-wrap; word-break:break-word; }
+  #out .ai { color:var(--text); margin:4px 0; } #out .tool { color:var(--tool); } #out .err { color:var(--err); } #out .dim { color:var(--dim); } #out .me { color:var(--accent); margin-top:8px; }
+  #out:not(.show-tools) .tool { display:none; }
+  details { color:var(--dim); } details pre { max-height:120px; overflow:auto; margin:4px 0 0; white-space:pre-wrap; }
+  .grow { flex:1; }
+</style>
+</head>
+<body>
+  <header>
+    <span id="dot" class="dot"></span>
+    <h1>MY Premiere MCP</h1>
+    <span id="stav">startuji…</span>
+  </header>
+
+  <div id="worker" style="color:var(--dim);font-size:11px">Worker: …</div>
+
+  <textarea id="prompt" placeholder="Např.: Přepiš zvuk aktivní sekvence a udělej novou sekvenci jen s větami o cenách, ať to dává smysl. Vyhoď přeřeknutí a dlouhé pauzy."></textarea>
+  <div class="row">
+    <select id="agent">
+      <option value="claude">Claude Code</option>
+      <option value="codex">Codex (GPT)</option>
+    </select>
+    <select id="model" title="Model (jen Claude)">
+      <option value="">výchozí model</option>
+      <option value="opus">Opus</option>
+      <option value="sonnet">Sonnet</option>
+    </select>
+    <label class="row" title="Navázat na předchozí konverzaci"><input type="checkbox" id="pokracovat" checked> navázat</label>
+    <label class="row" title="Zobrazit i technické volání nástrojů (ladění)"><input type="checkbox" id="nastroje"> nástroje</label>
+    <span class="grow"></span>
+    <button id="undo" title="Vrátí jeden krok zpět v Premiere. Funguje jen na jedno použití mezi akcemi - klikni jednou a zkontroluj výsledek, opakované klikání za sebou může klip poškodit místo opravit.">↶ Zpět</button>
+    <button id="stop" disabled>Stop</button>
+    <button id="run" class="primary">Spustit</button>
+  </div>
+
+  <div class="row" style="flex-wrap:wrap">
+    <span style="color:var(--dim)">Titulky:</span>
+    <label class="row" title="Max. znaků na jeden řádek titulku">znaků/řádek
+      <select id="ccChars">
+        <option value="20">20</option>
+        <option value="25">25</option>
+        <option value="30">30</option>
+        <option value="35">35</option>
+        <option value="40" selected>40</option>
+        <option value="45">45</option>
+        <option value="50">50</option>
+      </select>
+    </label>
+    <label class="row" title="Počet řádků jednoho titulku">řádky
+      <select id="ccLines">
+        <option value="1">jednořádkové</option>
+        <option value="2" selected>dvouřádkové</option>
+      </select>
+    </label>
+    <button id="addCaptions" title="Vygeneruje české titulky z přepisu podle aktuálního stavu sekvence a přidá je do Premiery jako titulkovou stopu. Spustit až po hotovém střihu.">💬 Přidat titulky</button>
+  </div>
+
+  <div id="out"></div>
+
+  <details>
+    <summary>Záložní varianta: jiná AI (ChatGPT apod.)</summary>
+    <div style="color:var(--dim);margin:6px 0">
+      1) Otevři instrukce a vlož je do chatu ↓ &nbsp; 2) Vlož zadání "Exportuj analýzu…" ↓ (výsledný .md soubor vlož do chatu taky)
+      &nbsp; 3) Od AI dostaneš JSON plán, ulož ho do souboru a vlož zadání "Sestříhej podle plánu…" ↓
+    </div>
+    <div class="row" style="flex-wrap:wrap;gap:6px">
+      <button id="openInstrukce">📋 Otevřít instrukce pro AI</button>
+      <button id="tplExport">Vzor: exportovat analýzu</button>
+      <button id="tplImport">Vzor: sestříhat podle plánu</button>
+    </div>
+  </details>
+
+  <details>
+    <summary>Most (port <span id="port"></span>) · požadavků: <span id="pocet">0</span> · <a href="#" id="reload" style="color:var(--accent)">znovu načíst host.jsx</a></summary>
+    <pre id="log"></pre>
+  </details>
+
+  <script src="main.js"></script>
+</body>
+</html>

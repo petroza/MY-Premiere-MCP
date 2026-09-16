@@ -1,0 +1,14 @@
+﻿import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+const out = 'O:/MYpremiereMCP/test/export/multicam_pribeh.mp4';
+fs.mkdirSync('O:/MYpremiereMCP/test/export', { recursive: true });
+if (fs.existsSync(out)) fs.unlinkSync(out);
+const c = new Client({ name: 't', version: '0' });
+await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/MYpremiereMCP/server/index.js'] }));
+const t0 = Date.now();
+const r = await c.callTool({ name: 'export_sequence', arguments: { output: out } }, undefined, { timeout: 1800000 });
+console.log(`export (${((Date.now() - t0) / 1000).toFixed(1)} s)${r.isError ? ' ERROR' : ''}: ${r.content[0].text}`);
+if (fs.existsSync(out)) console.log(`${(fs.statSync(out).size / 1e6).toFixed(1)} MB\n` + execFileSync('C:/Program Files/Shutter Encoder/Library/ffprobe.exe', ['-v', 'error', '-show_entries', 'format=duration:stream=codec_type,codec_name,width,height', '-of', 'compact', out], { encoding: 'utf8' }));
+await c.close();
