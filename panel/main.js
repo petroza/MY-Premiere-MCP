@@ -525,7 +525,11 @@
         out('⚙ ' + (item.tool || item.name || 'MCP') + ' ' + shortInput(item.arguments), 'tool');
         if (item.error) out('✖ ' + String(item.error), 'err');
       } else if (item.type === 'error') {
-        out('✖ ' + (item.message || JSON.stringify(item)), 'err');
+        // "Model metadata for X not found" u Ollama backendu je jen neškodné upozornění
+        // (běh pokračuje normálně dál) - nezobrazovat červeně jako skutečnou chybu.
+        var msg = item.message || JSON.stringify(item);
+        var benign = /model metadata for .* not found/i.test(msg);
+        out((benign ? '· ' : '✖ ') + msg, benign ? 'dim' : 'err');
       }
     } else if (t === 'turn.completed') {
       out('✔ hotovo', 'dim');
