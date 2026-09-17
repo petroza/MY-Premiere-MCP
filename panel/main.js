@@ -240,6 +240,18 @@
     outEl.classList.toggle('show-tools', $('nastroje').checked);
   });
 
+  function updateModelOptions() {
+    var agent = $('agent').value;
+    var opts = $('model').options;
+    for (var i = 0; i < opts.length; i++) {
+      var forAgent = opts[i].getAttribute('data-agent');
+      opts[i].hidden = !!forAgent && forAgent !== agent;
+    }
+    if ($('model').selectedOptions[0] && $('model').selectedOptions[0].hidden) $('model').value = '';
+  }
+  $('agent').addEventListener('change', updateModelOptions);
+  updateModelOptions();
+
   function out(text, cls) {
     var div = document.createElement('div');
     div.className = cls || 'ai';
@@ -480,8 +492,9 @@
         // jen širší: tady jde o celý sandbox/shell, ne jen o tenhle MCP server.
         '--dangerously-bypass-approvals-and-sandbox',
         '-c', 'mcp_servers.premiere.command="node"',
-        '-c', 'mcp_servers.premiere.args=["' + SERVER_JS + '"]',
-        '-'];
+        '-c', 'mcp_servers.premiere.args=["' + SERVER_JS + '"]'];
+      if ($('model').value) args.push('-m', $('model').value);
+      args.push('-');
     }
 
     out('› ' + prompt, 'me');
