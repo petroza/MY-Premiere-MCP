@@ -2,7 +2,10 @@
 
 Střih v Adobe Premiere Pro pomocí Claude (Claude Code / Claude Desktop) nebo Codex (GPT):
 **střih podle toho, co kdo říká** (český přepis s časy slov), **automatický střih více kamer podle mluvčího**
-a **lokální porozumění dlouhému materiálu**, které šetří kredity. Vše běží na tomhle PC, bez Ollamy a bez cloudu.
+a **lokální porozumění dlouhému materiálu**, které šetří kredity. Základ (přepis, diarizace, plán střihu)
+běží celý na tomhle PC bez Ollamy a bez cloudu – v panelu je navíc volitelně **Ollama jako třetí, čistě
+lokální agent** (detekuje se automaticky, když už Ollama na stroji běží), pro chvíle, kdy dojdou kredity
+u Claude/Codexu.
 
 ```
 Claude / Codex ──stdio──► server/index.js (MCP) ──HTTP :7880 + token──► CEP panel ──► host.jsx (ExtendScript v Premiere)
@@ -36,6 +39,12 @@ Příklady zadání (panel v Premiere, `claude` v terminálu, Claude Desktop):
 - „Hodinový materiál: udělej osnovu a navrhni střih lokálně, ať nepálíme kredity."
 
 Zadání jde i nadiktovat – tlačítko 🎤 v panelu nahraje řeč a lokálně ji přepíše (stejný Whisper jako na video, žádný cloud).
+
+Volba agenta v panelu: **Claude Code**, **Codex (GPT)**, a když na stroji běží Ollama s aspoň jedním
+modelem, co umí "tools" i "thinking" zároveň (bez "thinking" schopnosti Codexův `--oss` backend na
+Ollamě spadne) – i **Ollama (lokální)**, se stejnou MCP integrací jako Codex, jen bez API a bez kreditů.
+Menu modelů se pak samo naplní tím, co máš v Ollamě reálně stažené; čekej výrazně nižší spolehlivost
+volání nástrojů než u Claude/GPT-5 (menší model = víc chyb ve víceotáčkových úkolech).
 
 ### Dlouhý materiál a kredity
 1. `transcribe_media` + `diarize_media` / `speakerTracks` + `rename_speakers` – vše lokálně.

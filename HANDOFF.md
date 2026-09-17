@@ -253,6 +253,26 @@ Při testu modelu Haiku 4.5 (viz [5p](#5p)) v reálné víceotáčkové konverza
 ## 5s. UI: pole pro psaní zadání přesunuto pod výpis konverzace (2026-09-17)
 
 Uživatel: "bude lepší když to okno kam píšu bude pod tím textem bude to mít lepší logiku" – běžné chatové rozložení (historie nahoře, psací pole dole), dřív to bylo obráceně. V `panel/index.html` přesunut `<div id="out">` před `<textarea id="prompt">` (CSS `flex:1` na `#out` beze změny, jen pořadí v DOM) – ověřeno přes devtools po reloadu (`getBoundingClientRect`), `#out` teď reálně nahoře, psací pole s tlačítky dole. Reload panelu jsem záměrně odložil, dokud neskončil živě běžící uživatelův úkol (tagování podstatných jmen), aby se nepřerušil.
+
+## 5t. Třetí agent v panelu: Ollama jako lokální záloha, když dojdou kredity (2026-09-17)
+
+Uživatel se zeptal, jaký lokální model by mohl nahradit Claude/GPT jako záložní řešení, a po mém návrhu ("chceš, abych to zapojil a otestoval naostro?") potvrdil: "ok takže když zjistí že běží ollama tak to může využít a automaticky si sáhne po vhodném modelu a půjde to přepnout". Než jsem cokoli napsal do kódu, ověřil jsem reálný stav stroje (ne odhadem):
+
+- GPU: RTX 4070 Ti, 12 GB VRAM (`nvidia-smi`).
+- Ollama už běží (port 11434) a má nainstalovanou velkou knihovnu modelů (`ollama list`/`api/tags`).
+
+**Klíčový nález z živého testování** (přímo přes `codex exec --oss --local-provider ollama`, mimo panel): Codex u lokálního Ollama backendu **vyžaduje, aby model uměl "thinking"** (schopnost z `api/tags` → `capabilities`) – bez ní tvrdě spadne (`"X" does not support thinking`, opakované reconnecty), a to i s `-c model_reasoning_effort="minimal"`. Zkoušel jsem postupně:
+- `qwen2.5-coder:14b` (jen `completion,tools,insert`, žádné "thinking") → **spadlo**.
+- `qwen3:1.7b` (`tools,thinking`, ale jen 1,7B) → připojilo se, ale model **halucinoval špatné jméno/parametry nástroje** (myslel si, že `premiere_status` potřebuje `project_id`/`deployment_id`) a nikdy reálně nezavolal žádný nástroj – příliš slabý na tenhle úkol.
+- `gemma4:latest` (9,6 GB, `vision,audio,tools,thinking`, vejde se celá do 12 GB VRAM) → **fungovalo správně** ve dvou testech (`premiere_status`, `list_project_items` se `sort:"recent"` a správnou extrakcí odpovědi).
+
+**Implementace** (`panel/index.html`, `panel/main.js`):
+- `findExe('ollama')` mapuje na `codex.exe` (Ollama backend řeší Codex sám přes `--oss --local-provider ollama`, nespouští se `ollama.exe` přímo).
+- Při startu panelu `detectOllama()` zavolá `127.0.0.1:11434/api/tags`; když odpoví, přidá do `#agent` volbu "Ollama (lokální)" a do `#model` jen modely, co mají **zároveň `tools` i `thinking`** (jinak spadnou) **a nejsou `...cloud`** (ty běží přes Ollamin vlastní cloud, ne lokálně – i tak se totiž objevily v seznamu, i s velikostí ~0, proto filtr i na `size`). Když Ollama neběží, agent/modely se prostě nepřidají (žádná rozbitá volba navíc).
+- Výchozí model = největší z vyhovujících, co se ještě vejde pod ~11 GB (rychlost + kvalita), pokud si uživatel dřív nevybral jiný (`localStorage pmcp.model.ollama`, stejný mechanismus jako Claude/Codex).
+- `runAgent()`: běží přes stejnou codex.exe větev jako GPT (`--sandbox read-only` + `default_tools_approval_mode="approve"`), navíc `--oss --local-provider ollama`.
+- **Ověřeno end-to-end přes samotný panel** (`scripts/panel-run.mjs`): automaticky vybraný model (`gemma4:e4b`, stejný model jako `gemma4:latest`, jen jiný tag) správně zavolal `premiere_status` a vrátil verzi Premiery.
+- **Neimplementováno/nezkoušeno**: silnější kandidáti jako `nvjob/DeepSeek-R1-32B-Cline` (18,6 GB, nevejde se celé do VRAM) nebo `qwen3-vl:8b` – filtr je zahrne taky (mají tools+thinking), ale výchozí volba padla na ověřeně fungující `gemma4`. Kvalita na reálném (ne triviálním) editorském úkolu zatím netestována – čekat výrazně nižší spolehlivost než u Claude/GPT (podobně jako u Haiku 4.5, viz [5r](#5r), spíš horší).
 ## 6. Otevřené úkoly (priorita)
 1. `install.ps1` otestovat na čistém prostředí (2026-09-16: statická revize proběhla, žádné chybějící pip/npm závislosti ani zjevné bugy nenalezeny – `undici`/`opencv-python-headless` se nainstalují automaticky, model `Qwen3-VL` se stáhne v kroku 6b/7 – ale skutečný běh na čistém PC pořád neproběhl). `make_long_test.py`/`transcribe-winrec.mjs` jsou WINREC-specifické (lze smazat).
 2. Diarizace: na nahrávce z místnosti (AMI) ztratily 2 tišší mluvčí úplně, ale na **studiovém zvuku funguje spolehlivě** i na 3 mluvčích (viz sekce 5d – nejde o obecnou slabinu, jen o room-recording scénář). Zavedená oprava pro room-nahrávky by byla **VBx shlukování** (sekce 5b) – netriviální, neimplementováno, a podle 5d možná ani není potřeba tak naléhavě, jak se zdálo. **Pro multicam vždy preferovat `speakerTracks`**, kdykoli je to možné.
