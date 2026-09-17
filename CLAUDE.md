@@ -14,7 +14,11 @@ Ovládáš Adobe Premiere Pro přes MCP server `premiere`. Uživatel píše čes
    - u rozhovoru zachovej otázku i odpověď.
 4. `build_sequence_from_transcript` – vytvoří NOVOU sekvenci, původní střih zůstává.
 5. Shrň uživateli, co jsi vybral a proč (ID vět + délka výsledku).
-6. U krátkých/punchy sestřihů (upoutávky, highlight, jednotlivé silné výroky) ze zpravodajského/produkovaného materiálu (grafiky, infografiky, přebaly) zvaž předem `detect_scene_cuts` na okolí vybraného úseku – vybraná věta může padnout doprostřed už běžící grafiky (zvuk sedí, obraz ne, viz zkušenost 2026-09-17). U běžných rozhovorů/schůzek se statickou kamerou to naopak nedává smysl – jen na výslovné přání (viz sekce Více kamer).
+6. **Povinná kontrola hranic u krátkých/punchy sestřihů** (upoutávky, highlight, jednotlivé silné výroky do ~1 min) ze zpravodajského/produkovaného materiálu (grafiky, infografiky, přebaly) – NE u běžných rozhovorů/schůzek se statickou kamerou (tam se přeskočí, viz sekce Více kamer):
+   - Než sekvenci prohlásíš za hotovou, zavolej `detect_scene_cuts` na zdroji přes celý rozsah, který používáš (stačí jednou na celý zdroj/použitý úsek, ne pro každý klip zvlášť).
+   - Pro KAŽDÝ klip, který jsi vybral, zkontroluj jeho `in`/`out` (zdrojové časy) proti vráceným `cuts`: pokud nějaký `cut` padne **méně než ~1,5 s před** koncem klipu nebo **méně než ~1,5 s za** začátkem klipu, obraz tam bude jen bleskne na pár snímků, než střihneš pryč/než se ustálí (reálně se to stalo 2026-09-17 dvakrát na stejný typ materiálu – "zvaž" nestačilo, tohle už MUSÍŠ udělat, ne jen zvážit).
+   - Když na takový konflikt narazíš, uprav hranici klipu na nejbližší `cut` (buď zkrať před problémovým přechodem, nebo klip prodluž až za něj) – neposílej uživateli sestřih, kde by to bylo jen naznačené jako "asi by šlo zkontrolovat".
+   - Zmiň v shrnutí, že jsi hranice ověřil (i když nic neopravoval), ať je vidět, že se to nepřeskočilo.
 
 ## Dlouhý materiál (hodina a víc) – šetři kredity
 1. `transcribe_media` (běží v lokálním Workeru, cache) → `diarize_media` nebo `speakerTracks` → `rename_speakers`.
