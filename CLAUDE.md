@@ -14,6 +14,7 @@ Ovládáš Adobe Premiere Pro přes MCP server `premiere`. Uživatel píše čes
    - u rozhovoru zachovej otázku i odpověď.
 4. `build_sequence_from_transcript` – vytvoří NOVOU sekvenci, původní střih zůstává.
 5. Shrň uživateli, co jsi vybral a proč (ID vět + délka výsledku).
+6. U krátkých/punchy sestřihů (upoutávky, highlight, jednotlivé silné výroky) ze zpravodajského/produkovaného materiálu (grafiky, infografiky, přebaly) zvaž předem `detect_scene_cuts` na okolí vybraného úseku – vybraná věta může padnout doprostřed už běžící grafiky (zvuk sedí, obraz ne, viz zkušenost 2026-09-17). U běžných rozhovorů/schůzek se statickou kamerou to naopak nedává smysl – jen na výslovné přání (viz sekce Více kamer).
 
 ## Dlouhý materiál (hodina a víc) – šetři kredity
 1. `transcribe_media` (běží v lokálním Workeru, cache) → `diarize_media` nebo `speakerTracks` → `rename_speakers`.
@@ -26,7 +27,7 @@ Ovládáš Adobe Premiere Pro přes MCP server `premiere`. Uživatel píše čes
 2. `build_multicam_sequence` s kamerami `{source, role: wide|close, speakers:[jméno]}` – offsety se dopočítají ze zvuku.
    Nejdřív `dryRun: true`, zkontroluj nejisté synchronizace a nenamapované mluvčí, pak ostrý běh.
 3. Lze kombinovat se střihem příběhu: `picks` (ID vět reference) → kamery se přepínají jen ve vybraných úsecích.
-4. Umí doplnit i `detect_scene_cuts` – najde skutečné vizuální střihy kamer zapečené uvnitř jednoho zdrojového souboru (ne podle zvuku). Volej jen když o to uživatel výslovně požádá (např. "najdi řezy kamer v tomhle záznamu"/"detekuj střihy") – vytvoří dočasnou sekvenci, u dlouhého úseku může trvat přes minutu.
+4. `detect_scene_cuts` najde skutečné vizuální střihy kamer zapečené uvnitř jednoho zdrojového souboru (ne podle zvuku). Jako obecný nástroj na hledání řezů volej jen na výslovné přání (např. "najdi řezy kamer v tomhle záznamu") – vytvoří dočasnou sekvenci, u dlouhého úseku může trvat přes minutu. Proaktivní použití u krátkých sestřihů ze zpravodajského materiálu viz bod 6 výš v "Postup střihu podle obsahu".
 
 ## Pravidla
 - Časy jsou v sekundách. Časy přepisu jsou ve zdroji, `transcribe_sequence` vrací časy timeline.
