@@ -240,6 +240,12 @@
     outEl.classList.toggle('show-tools', $('nastroje').checked);
   });
 
+  // Poslední vybraný model si pamatuje zvlášť pro každého agenta, ať uživatel o volbu
+  // nepřijde při přepnutí Claude <-> Codex a zpátky.
+  var lastModelByAgent = { claude: '', codex: '' };
+  try { lastModelByAgent.claude = localStorage.getItem('pmcp.model.claude') || ''; } catch (e) {}
+  try { lastModelByAgent.codex = localStorage.getItem('pmcp.model.codex') || ''; } catch (e) {}
+
   function updateModelOptions() {
     var agent = $('agent').value;
     var opts = $('model').options;
@@ -247,9 +253,16 @@
       var forAgent = opts[i].getAttribute('data-agent');
       opts[i].hidden = !!forAgent && forAgent !== agent;
     }
-    if ($('model').selectedOptions[0] && $('model').selectedOptions[0].hidden) $('model').value = '';
+    var remembered = lastModelByAgent[agent] || '';
+    var hasOption = remembered && Array.prototype.some.call(opts, function (o) { return o.value === remembered && !o.hidden; });
+    $('model').value = hasOption ? remembered : '';
   }
   $('agent').addEventListener('change', updateModelOptions);
+  $('model').addEventListener('change', function () {
+    var agent = $('agent').value;
+    lastModelByAgent[agent] = $('model').value;
+    try { localStorage.setItem('pmcp.model.' + agent, $('model').value); } catch (e) {}
+  });
   updateModelOptions();
 
   function out(text, cls) {
@@ -486,13 +499,17 @@
       if ($('pokracovat').checked && sessionId) args.push('--resume', sessionId);
     } else {
       args = ['exec', '--json', '--skip-git-repo-check',
-        // Bez tohohle Codex v neinteraktivním exec režimu MCP volání vždy zamítne
+        // Bez schválení Codex v neinteraktivním exec režimu MCP volání vždy zamítne
         // ("MCP tool call requires approval, but approval policy is never") - není
-        // se koho zeptat. Stejná důvěra jako u Claude (--allowedTools mcp__premiere),
-        // jen širší: tady jde o celý sandbox/shell, ne jen o tenhle MCP server.
-        '--dangerously-bypass-approvals-and-sandbox',
+        // se koho zeptat. default_tools_approval_mode="approve" tohle řeší jen pro
+        // NÁŠ vlastní server (stejná důvěra jako u Claude --allowedTools mcp__premiere),
+        // --sandbox read-only navíc drží na uzdě zbytek (shell nástroje Codexu) -
+        // užší než dřívější --dangerously-bypass-approvals-and-sandbox, který rušil
+        // sandbox úplně pro všechno. Ověřeno naostro 2026-09-17.
+        '--sandbox', 'read-only',
         '-c', 'mcp_servers.premiere.command="node"',
-        '-c', 'mcp_servers.premiere.args=["' + SERVER_JS + '"]'];
+        '-c', 'mcp_servers.premiere.args=["' + SERVER_JS + '"]',
+        '-c', 'mcp_servers.premiere.default_tools_approval_mode="approve"'];
       if ($('model').value) args.push('-m', $('model').value);
       args.push('-');
     }
