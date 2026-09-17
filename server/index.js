@@ -706,6 +706,13 @@ function saveCaptionsIndex(idx) {
   fs.mkdirSync(path.dirname(CAPTIONS_INDEX_FILE), { recursive: true });
   fs.writeFileSync(CAPTIONS_INDEX_FILE, JSON.stringify(idx, null, 1), 'utf8');
 }
+// Otisk OBSAHU sekvence (ne jen jejího ID) – když uživatel ve stejné sekvenci smaže
+// staré klipy a vloží jiné video, sequenceID zůstane stejné, ale otisk se změní,
+// takže pojistka níž správně pozná, že jde o nový obsah, ne o opakované volání.
+function contentFingerprint(seq) {
+  const shape = seq.clips.map((c) => [c.mediaPath, c.track, c.start, c.end, c.inPoint, c.outPoint]);
+  return crypto.createHash('sha1').update(JSON.stringify(shape)).digest('hex').slice(0, 16);
+}
 
 tool(
   'add_captions',
@@ -713,7 +720,8 @@ tool(
     'jako nativní titulkovou stopu (import .srt + titulková stopa v sekvenci, vidět v Program monitoru). ' +
     'Spustit až po hotovém střihu – při dalším střihání by se časy titulků a obrazu rozjely. ' +
     'POZOR: Premiera umí zobrazit jen úplně PRVNÍ titulkovou stopu vytvořenou v sekvenci – další přidaná by byla neviditelná. ' +
-    'Proto nástroj podruhé na stejnou sekvenci odmítne běžet (dokud v Premiere ručně nesmažeš starou CC stopu, nebo nepošleš force: true).',
+    'Proto nástroj podruhé na stejný OBSAH sekvence odmítne běžet (dokud v Premiere ručně nesmažeš starou CC stopu, nebo nepošleš force: true) – ' +
+    'pojistka sleduje otisk klipů na timeline, ne jen ID sekvence, takže po výměně obsahu (smazání starého videa, vložení jiného) ve stejné sekvenci proběhne normálně znovu.',
   {
     sequence: seqArg,
     audioTracks: z.array(z.number().int()).optional().describe('Které audio stopy (0 = A1); výchozí všechny'),
@@ -732,9 +740,10 @@ tool(
   },
   async (a, extra) => {
     const seq = await premiere('getSequence', { sequence: a.sequence });
+    const fingerprint = contentFingerprint(seq);
     const capIdx = loadCaptionsIndex();
     const prev = capIdx[seq.sequenceID];
-    if (prev && !a.force) {
+    if (prev && prev.fingerprint === fingerprint && !a.force) {
       throw new Error(
         `Sekvence „${seq.name}“ už titulky jednou dostala (${prev.when}). Premiera bohužel umí zobrazit jen úplně PRVNÍ ` +
           'vytvořenou titulkovou stopu – další přidaná by zůstala v projektu, ale neviditelná. Smaž nejdřív v Premiere ' +
@@ -814,7 +823,7 @@ tool(
     fs.writeFileSync(srtPath, srtLines.join('\n'), 'utf8');
 
     await premiere('addCaptions', { sequence: seq.sequenceID, srtPath });
-    capIdx[seq.sequenceID] = { when: new Date().toISOString(), srt: srtPath, sequence: seq.name };
+    capIdx[seq.sequenceID] = { when: new Date().toISOString(), srt: srtPath, sequence: seq.name, fingerprint };
     saveCaptionsIndex(capIdx);
     return { cues: cues.length, srt: srtPath, sequence: seq.name };
   },
