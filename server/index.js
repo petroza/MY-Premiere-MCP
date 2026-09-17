@@ -83,6 +83,25 @@ function loadIndex() {
   }
 }
 
+// Slabší modely (např. Haiku) při delší konverzaci občas zapomenou předat povinné "path"/"source" -
+// místo syrové zod chyby ("expected string, received undefined") zkus dohledat jednoznačný zdroj sám.
+function singleTranscribedSource() {
+  const keys = Object.keys(loadIndex());
+  return keys.length === 1 ? keys[0] : null;
+}
+function missingSourceError(candidates) {
+  return new Error(
+    candidates.length
+      ? `Cesta k videu nebyla zadána a v cache je přepisů víc – urči "path" (jeden z: ${candidates.join(', ')}).`
+      : 'Cesta k videu nebyla zadána a v cache ještě není žádný přepis – urči "path" (zkus list_project_items).',
+  );
+}
+async function singleProjectMediaSource() {
+  const items = await premiere('listItems');
+  const media = items.filter((i) => i.mediaPath && !i.isSequence);
+  return media.length === 1 ? media[0].mediaPath : null;
+}
+
 function runPython(args, extra) {
   return new Promise((resolve, reject) => {
     const cmd = /[\\/]/.test(CONFIG.python[0]) ? path.resolve(ROOT, CONFIG.python[0]) : CONFIG.python[0];
@@ -604,7 +623,7 @@ tool(
   'transcribe_media',
   'Přepíše mluvené slovo souboru (Whisper large-v3 na GPU, výchozí čeština) s časy slov. Výsledek se cachuje. Vrací věty s ID a časy ve zdroji.',
   {
-    path: z.string().describe('Cesta k videu/zvuku'),
+    path: z.string().optional().describe('Cesta k videu/zvuku; bez zadání použije jediné video/zvuk v projektu (je-li jen jedno)'),
     language: z.string().optional().describe('Kód jazyka, výchozí "cs"; prázdný řetězec = autodetekce'),
     model: z.string().optional().describe('Whisper model (large-v3, large-v3-turbo, medium…)'),
     prompt: z.string().optional().describe('Kontext pro přepis: jména, značky, odborné termíny'),
@@ -613,9 +632,11 @@ tool(
     maxChars: z.number().int().optional().describe('Max. délka vráceného textu (výchozí 20000)'),
   },
   async (a, extra) => {
-    const { data, file, cached } = await transcribe(a.path, a, extra);
+    const p = a.path || (await singleProjectMediaSource());
+    if (!p) throw new Error('Cesta k videu/zvuku nebyla zadána a v projektu je médií víc/žádné – urči "path" (zkus list_project_items).');
+    const { data, file, cached } = await transcribe(p, a, extra);
     const head = [
-      `Přepis: ${a.path}`,
+      `Přepis: ${p}`,
       `Délka ${tc(data.duration)} · jazyk ${data.language} · ${data.segments.length} vět · ${data.wordCount} slov · ${data.model}/${data.device}${cached ? ' · z cache' : ` · ${data.elapsedSec} s`}`,
       data.speakers ? `Mluvčí: ${data.speakers.join(', ')}` : null,
       `Soubor: ${file}`,
@@ -629,7 +650,7 @@ tool(
   'get_transcript',
   'Vrátí (část) uloženého přepisu. Volitelně i jednotlivá slova s indexy pro přesný střih uvnitř věty.',
   {
-    path: z.string(),
+    path: z.string().optional().describe('Cesta k videu; bez zadání použije jediný existující přepis (je-li jen jeden)'),
     fromId: z.number().int().optional(),
     toId: z.number().int().optional(),
     from: z.number().optional().describe('Od času ve zdroji (s)'),
@@ -639,7 +660,9 @@ tool(
     maxChars: z.number().int().optional(),
   },
   async (a) => {
-    const tr = loadTranscript(a.path);
+    const p = a.path || singleTranscribedSource();
+    if (!p) throw missingSourceError(Object.keys(loadIndex()));
+    const tr = loadTranscript(p);
     const segs = tr.segments.filter(
       (s) =>
         (a.fromId === undefined || s.id >= a.fromId) &&
@@ -661,8 +684,14 @@ tool(
   'search_transcript',
   'Najde v přepisu věty obsahující text jako celé slovo/frázi na hranicích slov (bez ohledu na diakritiku a velikost písmen). ' +
     'Hledání "já" tedy nenajde "jaký" ani "jazyk" – jen samostatné slovo "já".',
-  { path: z.string(), query: z.string(), context: z.number().int().optional().describe('Počet okolních vět (výchozí 1)') },
-  async ({ path: p, query, context = 1 }) => {
+  {
+    path: z.string().optional().describe('Cesta k videu; bez zadání použije jediný existující přepis (je-li jen jeden)'),
+    query: z.string(),
+    context: z.number().int().optional().describe('Počet okolních vět (výchozí 1)'),
+  },
+  async ({ path: pathArg, query, context = 1 }) => {
+    const p = pathArg || singleTranscribedSource();
+    if (!p) throw missingSourceError(Object.keys(loadIndex()));
     const tr = loadTranscript(p);
     const q = stripDiacritics(query).trim();
     if (!q) throw new Error('Prázdný dotaz.');
@@ -885,7 +914,7 @@ tool(
   'HLAVNÍ STŘIHOVÝ NÁSTROJ. Vytvoří novou sekvenci z vybraných vět přepisu v zadaném pořadí. Věty lze zkrátit na rozsah slov (fromWord/toWord). Hranice střihu se počítají z časů slov s bezpečným odsazením, navazující věty se spojí.',
   {
     name: z.string().describe('Název nové sekvence'),
-    source: z.string().describe('Zdroj, který se vkládá na timeline (video)'),
+    source: z.string().optional().describe('Zdroj, který se vkládá na timeline (video); bez zadání použije jediný existující přepis (je-li jen jeden)'),
     transcriptSource: z
       .string()
       .optional()
@@ -906,14 +935,16 @@ tool(
     extraAudio,
   },
   async (a, extra) => {
-    const tr = loadTranscript(a.transcriptSource || a.source);
+    const source = a.source || singleTranscribedSource();
+    if (!source) throw missingSourceError(Object.keys(loadIndex()));
+    const tr = loadTranscript(a.transcriptSource || source);
     const ranges = picksToRanges(tr, a.picks, {
       padBefore: a.padBefore ?? 0.08,
       padAfter: a.padAfter ?? 0.15,
       mergeGap: a.mergeGap ?? 0.4,
     });
-    await refineOutPoints(a.transcriptSource || a.source, ranges, extra);
-    const segments = withExtras(ranges, a.source, a.extraAudio);
+    await refineOutPoints(a.transcriptSource || source, ranges, extra);
+    const segments = withExtras(ranges, source, a.extraAudio);
     return buildAndReport(a.name, segments, a.gap ?? 0, {
       ranges: ranges.map((r) => `${tc(r.in)}–${tc(r.out)} věty ${r.ids.join(',')}`),
     });
@@ -925,18 +956,20 @@ tool(
   'Vytvoří novou sekvenci ze zdroje bez hluchých míst (ponechá jen řeč, pauzy delší než minPause vystřihne).',
   {
     name: z.string(),
-    source: z.string(),
+    source: z.string().optional().describe('Bez zadání použije jediný existující přepis (je-li jen jeden)'),
     transcriptSource: z.string().optional().describe('Soubor s přepisem, když řeč je v jiném souboru (výchozí = source)'),
     minPause: z.number().optional().describe('Pauza delší než toto se vystřihne (výchozí 0.7 s)'),
     pad: z.number().optional().describe('Odsazení kolem řeči (výchozí 0.15 s)'),
     extraAudio,
   },
   async (a, extra) => {
-    const tr = loadTranscript(a.transcriptSource || a.source);
+    const source = a.source || singleTranscribedSource();
+    if (!source) throw missingSourceError(Object.keys(loadIndex()));
+    const tr = loadTranscript(a.transcriptSource || source);
     const ranges = mergeRanges(speechIslands(tr, a.minPause ?? 0.7, a.pad ?? 0.15), 0);
-    await refineOutPoints(a.transcriptSource || a.source, ranges, extra);
+    await refineOutPoints(a.transcriptSource || source, ranges, extra);
     const kept = ranges.reduce((acc, r) => acc + r.out - r.in, 0);
-    const segments = withExtras(ranges, a.source, a.extraAudio);
+    const segments = withExtras(ranges, source, a.extraAudio);
     return buildAndReport(a.name, segments, 0, {
       original: tc(tr.duration),
       removed: tc(Math.max(0, tr.duration - kept)),
