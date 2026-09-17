@@ -261,7 +261,11 @@ async function refineOutPoints(source, ranges, extra) {
   if (!fs.existsSync(source) || !ranges.length) return;
   const points = ranges.map((r, i) => {
     const nextIn = ranges[i + 1]?.in ?? Infinity;
-    return { at: r.out, direction: 'end', maxExtend: Math.max(0, Math.min(0.4, nextIn - r.out - 0.02)) };
+    // Nikdy neprodloužit přes další skutečné slovo v přepisu (maxOut, spočítané v cutBounds) - i když
+    // zrovna nejde o další vybraný úsek. Bez týhle meze doladění podle vlny umělo "ukousnout" kousek
+    // slova vyloučeného přes toWord, protože o hranicích uvnitř věty jinak vůbec nevědělo.
+    const ceiling = Math.min(nextIn, r.maxOut ?? Infinity);
+    return { at: r.out, direction: 'end', maxExtend: Math.max(0, Math.min(0.4, ceiling - r.out - 0.02)) };
   });
   try {
     const res = await runJob('refine_edges', { path: source, points }, extra);
@@ -401,8 +405,12 @@ function cutBounds(words, a, b, padBefore, padAfter) {
   // hodně z padAfter/padBefore, takže věta zněla uťatě, i když místo na dokončení bylo.
   const GUARD = 0.02;
   const lo = prevEnd === -Infinity ? a - padBefore : Math.max(a - padBefore, prevEnd + GUARD);
-  const hi = nextStart === Infinity ? b + padAfter : Math.min(b + padAfter, nextStart - GUARD);
-  return [Math.max(0, Math.min(lo, a)), Math.max(hi, b)];
+  // hiCeiling = absolutní strop (další slovo v přepisu, i mimo tenhle výběr) - refine_edges (doladění
+  // podle zvukové vlny) přes něj nesmí prodloužit, jinak by mohl "ukousnout" začátek vyloučeného
+  // slova (např. za toWord), i když cutBounds sám o sobě hranici spočítal správně.
+  const hiCeiling = nextStart === Infinity ? Infinity : nextStart - GUARD;
+  const hi = Math.min(b + padAfter, hiCeiling);
+  return [Math.max(0, Math.min(lo, a)), Math.max(hi, b), Math.max(hiCeiling, b)];
 }
 
 function mergeRanges(ranges, mergeGap) {
@@ -410,7 +418,10 @@ function mergeRanges(ranges, mergeGap) {
   for (const r of ranges) {
     const last = merged.at(-1);
     if (last && r.in >= last.in && r.in - last.out <= mergeGap) {
-      last.out = Math.max(last.out, r.out);
+      if (r.out > last.out) {
+        last.out = r.out;
+        last.maxOut = r.maxOut;
+      }
       last.ids.push(...r.ids);
     } else {
       merged.push({ ...r, ids: [...r.ids] });
@@ -436,8 +447,9 @@ function picksToRanges(tr, picks, { padBefore, padAfter, mergeGap }) {
       a = ws[fw].s;
       b = ws[tw].e;
     }
-    const [lo, hi] = cutBounds(words, a, b, padBefore, padAfter);
-    return { in: lo, out: Math.min(hi, tr.duration || hi), ids: [p.id] };
+    const [lo, hi, hiCeiling] = cutBounds(words, a, b, padBefore, padAfter);
+    const dur = tr.duration || hi;
+    return { in: lo, out: Math.min(hi, dur), maxOut: Math.min(hiCeiling, dur), ids: [p.id] };
   });
   return mergeRanges(ranges, mergeGap);
 }
