@@ -467,8 +467,9 @@ function speechIslands(tr, minPause, pad) {
   }
   if (cur) islands.push(cur);
   return islands.map((i) => {
-    const [lo, hi] = cutBounds(words, i.a, i.b, pad, pad);
-    return { in: lo, out: Math.min(hi, tr.duration || hi), ids: [] };
+    const [lo, hi, hiCeiling] = cutBounds(words, i.a, i.b, pad, pad);
+    const dur = tr.duration || hi;
+    return { in: lo, out: Math.min(hi, dur), maxOut: Math.min(hiCeiling, dur), ids: [] };
   });
 }
 
@@ -930,9 +931,10 @@ tool(
     pad: z.number().optional().describe('Odsazení kolem řeči (výchozí 0.15 s)'),
     extraAudio,
   },
-  async (a) => {
+  async (a, extra) => {
     const tr = loadTranscript(a.transcriptSource || a.source);
     const ranges = mergeRanges(speechIslands(tr, a.minPause ?? 0.7, a.pad ?? 0.15), 0);
+    await refineOutPoints(a.transcriptSource || a.source, ranges, extra);
     const kept = ranges.reduce((acc, r) => acc + r.out - r.in, 0);
     const segments = withExtras(ranges, a.source, a.extraAudio);
     return buildAndReport(a.name, segments, 0, {
