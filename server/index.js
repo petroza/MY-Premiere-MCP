@@ -254,6 +254,23 @@ async function transcribe(source, opts = {}, extra) {
   return { data: readJson(r.file), file: r.file, cached: r.cached };
 }
 
+// Doladí konec vybraného úseku podle skutečné energie zvuku – Whisperovy časy slov mívají u konce
+// věty drobnou nepřesnost (viz leadIn u titulků, tady je to stejný jev na druhé straně). Jen
+// PRODLUŽUJE (nikdy nezkracuje pod to, co spočítal cutBounds) a nikdy nepřeteče do dalšího úseku.
+async function refineOutPoints(source, ranges, extra) {
+  if (!fs.existsSync(source) || !ranges.length) return;
+  const points = ranges.map((r, i) => {
+    const nextIn = ranges[i + 1]?.in ?? Infinity;
+    return { at: r.out, direction: 'end', maxExtend: Math.max(0, Math.min(0.4, nextIn - r.out - 0.02)) };
+  });
+  try {
+    const res = await runJob('refine_edges', { path: source, points }, extra);
+    res.points.forEach((p, i) => { ranges[i].out = p.time; });
+  } catch {
+    // zvuková analýza selhala (např. soubor bez zvuku) – necháme původní časy z cutBounds
+  }
+}
+
 // Původní přepis bez Workeru (přímé spuštění transcribe.py) – záloha
 async function transcribeLocal(source, opts = {}, extra) {
   if (!fs.existsSync(source)) throw new Error('Soubor neexistuje: ' + source);
@@ -379,9 +396,13 @@ function cutBounds(words, a, b, padBefore, padAfter) {
     if (w.e <= a + 1e-3 && w.e > prevEnd) prevEnd = w.e;
     if (w.s >= b - 1e-3 && w.s < nextStart) nextStart = w.s;
   }
-  const lo = prevEnd === -Infinity ? a - padBefore : Math.max(a - padBefore, (prevEnd + a) / 2);
-  const hi = nextStart === Infinity ? b + padAfter : Math.min(b + padAfter, (b + nextStart) / 2);
-  return [Math.max(0, lo), hi];
+  // Bezpečnostní rezerva k sousednímu (nevybranému) slovu - jen ať se s ním střih nepřekrývá,
+  // ne půlka mezery. Při plynulé řeči (mezera mezi větami < 2*pad) dřív ubírala zbytečně
+  // hodně z padAfter/padBefore, takže věta zněla uťatě, i když místo na dokončení bylo.
+  const GUARD = 0.02;
+  const lo = prevEnd === -Infinity ? a - padBefore : Math.max(a - padBefore, prevEnd + GUARD);
+  const hi = nextStart === Infinity ? b + padAfter : Math.min(b + padAfter, nextStart - GUARD);
+  return [Math.max(0, Math.min(lo, a)), Math.max(hi, b)];
 }
 
 function mergeRanges(ranges, mergeGap) {
@@ -854,13 +875,14 @@ tool(
     gap: z.number().optional().describe('Mezera mezi úseky na timeline v s (výchozí 0)'),
     extraAudio,
   },
-  async (a) => {
+  async (a, extra) => {
     const tr = loadTranscript(a.transcriptSource || a.source);
     const ranges = picksToRanges(tr, a.picks, {
       padBefore: a.padBefore ?? 0.08,
       padAfter: a.padAfter ?? 0.15,
       mergeGap: a.mergeGap ?? 0.4,
     });
+    await refineOutPoints(a.transcriptSource || a.source, ranges, extra);
     const segments = withExtras(ranges, a.source, a.extraAudio);
     return buildAndReport(a.name, segments, a.gap ?? 0, {
       ranges: ranges.map((r) => `${tc(r.in)}–${tc(r.out)} věty ${r.ids.join(',')}`),

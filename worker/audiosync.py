@@ -20,6 +20,14 @@ def _onset_envelope(x):
     return (d - d.mean()) / (d.std() + 1e-9)
 
 
+def _energy_envelope(x):
+    import numpy as np
+
+    n = len(x) // HOP
+    frames = x[: n * HOP].astype("float32").reshape(n, HOP)
+    return np.sqrt(np.mean(frames * frames, axis=1))
+
+
 def _has_audio(path: str) -> bool:
     import av
 
@@ -84,3 +92,57 @@ def sync(params: dict, ctx) -> dict:
     data = {"reference": os.path.abspath(ref), "note": "offset = čas v referenci, kdy soubor začíná", "results": results}
     write_json(out, data)
     return data
+
+
+def refine_edges(params: dict, ctx) -> dict:
+    """Doladí konce/začátky střihů podle skutečné energie zvuku, ne jen podle časů slov z Whisperu
+    (ty mívají u krátkých/tichých hlásek na konci věty systematickou nepřesnost). Pro každý požadovaný
+    bod najde v okolí buď konec řeči (hledá dopředu od 'at', kde energie klesne pod práh ticha), nebo
+    začátek (hledá zpátky). Nikdy neposune přes 'maxExtend' a nikdy 'proti' směru hledání (jen prodlužuje)."""
+    import numpy as np
+    from faster_whisper import decode_audio
+
+    path = params["path"]
+    points = params["points"]  # [{at, direction: "end"|"start", maxExtend}]
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Soubor neexistuje: {path}")
+    if not _has_audio(path):
+        raise ValueError(f"Soubor nemá zvukovou stopu: {path}")
+
+    audio = decode_audio(path, sampling_rate=SR)
+    total = len(audio) / SR
+    out = []
+    for pt in points:
+        at = float(pt["at"])
+        direction = pt.get("direction", "end")
+        max_extend = float(pt.get("maxExtend", 0.4))
+        pad = 0.25
+        lo = max(0.0, at - pad)
+        hi = min(total, at + max_extend + pad)
+        seg = audio[int(lo * SR): int(hi * SR)]
+        if len(seg) < SR * 0.05:
+            out.append({"at": at, "time": round(at, 3)})
+            continue
+        env = _energy_envelope(seg)
+        if not len(env):
+            out.append({"at": at, "time": round(at, 3)})
+            continue
+        noise_floor = float(np.percentile(env, 20))
+        peak = float(np.max(env))
+        threshold = max(noise_floor * 2.5, peak * 0.05, 1e-6)
+        frame_s = HOP / SR
+        at_idx = min(len(env) - 1, max(0, round((at - lo) / frame_s)))
+        if direction == "end":
+            i = at_idx
+            while i < len(env) - 1 and env[i] > threshold:
+                i += 1
+            refined = lo + i * frame_s
+            refined = min(max(refined, at), at + max_extend)
+        else:
+            i = at_idx
+            while i > 0 and env[i] > threshold:
+                i -= 1
+            refined = lo + i * frame_s
+            refined = max(min(refined, at), at - max_extend)
+        out.append({"at": at, "time": round(refined, 3)})
+    return {"points": out}

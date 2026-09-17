@@ -29,6 +29,7 @@ HANDLERS = {
     "diarize": diarize.diarize,
     "rename_speakers": diarize.rename_speakers,
     "sync": audiosync.sync,
+    "refine_edges": audiosync.refine_edges,
     "analyze": analysis.analyze,
     "plan_edit": analysis.plan_edit,
     "frame": frame.get_frame,
