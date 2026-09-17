@@ -542,13 +542,30 @@ tool('get_project', 'Informace o projektu a seznam sekvencí.', {}, () => premie
 
 tool(
   'list_project_items',
-  'Položky projektu (klipy, sekvence, biny) s nodeId a cestou k médiu.',
-  { filter: z.string().optional().describe('Filtr podle názvu nebo cesty') },
-  async ({ filter }) => {
-    const items = await premiere('listItems');
-    if (!filter) return items;
-    const f = stripDiacritics(filter);
-    return items.filter((i) => stripDiacritics(`${i.name} ${i.mediaPath || ''}`).includes(f));
+  'Položky projektu (klipy, sekvence, biny) s nodeId a cestou k médiu. Pro zjištění nově vloženého/naimportovaného ' +
+    'souboru použij sort: "recent" (řadí podle data změny souboru na disku) – NE shell příkazy (Get-ChildItem/ls apod.), ' +
+    'ty jsou mimo pracovní adresář zablokované bezpečnostním sandboxem a stejně by to nebyl spolehlivý způsob.',
+  {
+    filter: z.string().optional().describe('Filtr podle názvu nebo cesty'),
+    sort: z.enum(['recent']).optional().describe('"recent" = nejnovější soubor na disku první (podle data poslední změny)'),
+  },
+  async ({ filter, sort }) => {
+    let items = await premiere('listItems');
+    if (filter) {
+      const f = stripDiacritics(filter);
+      items = items.filter((i) => stripDiacritics(`${i.name} ${i.mediaPath || ''}`).includes(f));
+    }
+    if (sort === 'recent') {
+      items = items.map((i) => {
+        try {
+          return { ...i, modified: fs.statSync(i.mediaPath).mtime.toISOString() };
+        } catch {
+          return i;
+        }
+      });
+      items.sort((a, b) => (b.modified || '').localeCompare(a.modified || ''));
+    }
+    return items;
   },
 );
 
