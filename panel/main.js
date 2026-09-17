@@ -242,67 +242,9 @@
 
   // Poslední vybraný model si pamatuje zvlášť pro každého agenta, ať uživatel o volbu
   // nepřijde při přepnutí Claude <-> Codex a zpátky.
-  var lastModelByAgent = { claude: '', codex: '', ollama: '' };
+  var lastModelByAgent = { claude: '', codex: '' };
   try { lastModelByAgent.claude = localStorage.getItem('pmcp.model.claude') || ''; } catch (e) {}
   try { lastModelByAgent.codex = localStorage.getItem('pmcp.model.codex') || ''; } catch (e) {}
-  try { lastModelByAgent.ollama = localStorage.getItem('pmcp.model.ollama') || ''; } catch (e) {}
-
-  // Záložní běh úplně bez kreditů: když lokálně běží Ollama, nabídni ji jako třetího agenta
-  // (spouští se pořád přes codex.exe, jen s --oss --local-provider ollama). Zjištěno naostro
-  // 2026-09-17: model MUSÍ mít schopnost "thinking", jinak codex spadne na "does not support
-  // thinking" (funguje jen s "tools" ale bez "thinking" ani nenaběhne) - proto se filtruje na obě.
-  // Modely s příponou ":cloud" v Ollamě nejsou lokální (běží přes cloud Ollamy), ty se vynechají.
-  function detectOllama() {
-    var req = http.request(
-      { host: '127.0.0.1', port: 11434, path: '/api/tags', method: 'GET', timeout: 1500 },
-      function (res) {
-        var body = '';
-        res.on('data', function (d) { body += d; });
-        res.on('end', function () {
-          try { addOllamaAgent(JSON.parse(body).models || []); } catch (e) {}
-        });
-      },
-    );
-    req.on('error', function () {});
-    req.on('timeout', function () { req.destroy(); });
-    req.end();
-  }
-
-  function addOllamaAgent(models) {
-    var usable = models.filter(function (m) {
-      var caps = m.capabilities || [];
-      // "...cloud" modely (i s číslem/pomlčkou před tím, např. "gpt-oss:20b-cloud") běží přes
-      // Ollamin vlastní cloud, ne lokálně - nejsou to skutečná záložní řešení bez kreditů/internetu.
-      return caps.indexOf('tools') >= 0 && caps.indexOf('thinking') >= 0 && !/cloud$/i.test(m.name) && m.size > 1e9;
-    });
-    if (!usable.length) return;
-
-    if (!$('agent').querySelector('option[value="ollama"]')) {
-      var agentOpt = document.createElement('option');
-      agentOpt.value = 'ollama';
-      agentOpt.textContent = 'Ollama (lokální)';
-      $('agent').appendChild(agentOpt);
-    }
-    usable.sort(function (a, b) { return a.size - b.size; });
-    usable.forEach(function (m) {
-      if ($('model').querySelector('option[value="' + m.name + '"]')) return;
-      var o = document.createElement('option');
-      o.value = m.name;
-      o.setAttribute('data-agent', 'ollama');
-      o.hidden = $('agent').value !== 'ollama';
-      o.textContent = m.name + ' (' + (m.size / 1e9).toFixed(0) + ' GB)';
-      $('model').appendChild(o);
-    });
-    // Výchozí volba: největší model, co se ještě celý vejde na 12 GB VRAM (rychlost i kvalita) -
-    // jen pokud si uživatel dřív nevybral něco jiného.
-    if (!lastModelByAgent.ollama) {
-      var fitsVram = usable.filter(function (m) { return m.size < 11 * 1e9; });
-      var pick = (fitsVram.length ? fitsVram : usable).slice(-1)[0];
-      lastModelByAgent.ollama = pick.name;
-    }
-    updateModelOptions();
-  }
-  detectOllama();
 
   function updateModelOptions() {
     var agent = $('agent').value;
@@ -332,9 +274,6 @@
   }
 
   function findExe(name) {
-    // "ollama" agent běží taky přes codex.exe (--oss --local-provider ollama umí mluvit s
-    // lokálním Ollama serverem sám) - nespouštíme ollama.exe přímo.
-    name = name === 'ollama' ? 'codex' : name;
     try {
       var lines = cp.execSync('where.exe ' + name, { encoding: 'utf8', windowsHide: true }).split(/\r?\n/);
       for (var i = 0; i < lines.length; i++) if (/\.exe$/i.test(lines[i].trim())) return lines[i].trim();
@@ -362,7 +301,7 @@
 
   function setAiIcon(agentOrNull) {
     $('aiClaude').classList.toggle('on', agentOrNull === 'claude');
-    $('aiGpt').classList.toggle('on', agentOrNull === 'codex' || agentOrNull === 'ollama');
+    $('aiGpt').classList.toggle('on', agentOrNull === 'codex');
   }
 
   /* ---------------- diktování (mikrofon -> lokální Whisper) ---------------- */
@@ -525,8 +464,8 @@
         out('⚙ ' + (item.tool || item.name || 'MCP') + ' ' + shortInput(item.arguments), 'tool');
         if (item.error) out('✖ ' + String(item.error), 'err');
       } else if (item.type === 'error') {
-        // "Model metadata for X not found" u Ollama backendu je jen neškodné upozornění
-        // (běh pokračuje normálně dál) - nezobrazovat červeně jako skutečnou chybu.
+        // "Model metadata for X not found" je jen neškodné upozornění Codexu (chybí v jeho
+        // lokální katalogu metadat, běh pokračuje normálně dál) - nezobrazovat jako chybu.
         var msg = item.message || JSON.stringify(item);
         var benign = /model metadata for .* not found/i.test(msg);
         out((benign ? '· ' : '✖ ') + msg, benign ? 'dim' : 'err');
@@ -552,10 +491,6 @@
         : '✖ Codex CLI nenalezen. Nainstaluj: npm install -g @openai/codex a přihlas se (codex login).', 'err');
       return;
     }
-    if (agent === 'ollama' && !$('model').value) {
-      out('✖ Žádný lokální model s podporou nástrojů a "thinking" nenalezen v Ollamě.', 'err');
-      return;
-    }
     if (lastAgent !== agent) sessionId = null;
     lastAgent = agent;
 
@@ -579,10 +514,6 @@
         '-c', 'mcp_servers.premiere.command="node"',
         '-c', 'mcp_servers.premiere.args=["' + SERVER_JS + '"]',
         '-c', 'mcp_servers.premiere.default_tools_approval_mode="approve"'];
-      // Ollama = záložní běh úplně bez kreditů, když dojdou u Claude/GPT - stejná codex.exe
-      // integrace, jen s lokálním backendem. --oss --local-provider ollama mluví přímo na
-      // 127.0.0.1:11434, model se vybírá stejně přes -m. Ověřeno naostro 2026-09-17.
-      if (agent === 'ollama') args.push('--oss', '--local-provider', 'ollama');
       if ($('model').value) args.push('-m', $('model').value);
       args.push('-');
     }

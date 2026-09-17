@@ -273,6 +273,20 @@ Uživatel se zeptal, jaký lokální model by mohl nahradit Claude/GPT jako zál
 - `runAgent()`: běží přes stejnou codex.exe větev jako GPT (`--sandbox read-only` + `default_tools_approval_mode="approve"`), navíc `--oss --local-provider ollama`.
 - **Ověřeno end-to-end přes samotný panel** (`scripts/panel-run.mjs`): automaticky vybraný model (`gemma4:e4b`, stejný model jako `gemma4:latest`, jen jiný tag) správně zavolal `premiere_status` a vrátil verzi Premiery.
 - **Neimplementováno/nezkoušeno**: silnější kandidáti jako `nvjob/DeepSeek-R1-32B-Cline` (18,6 GB, nevejde se celé do VRAM) nebo `qwen3-vl:8b` – filtr je zahrne taky (mají tools+thinking), ale výchozí volba padla na ověřeně fungující `gemma4`. Kvalita na reálném (ne triviálním) editorském úkolu zatím netestována – čekat výrazně nižší spolehlivost než u Claude/GPT (podobně jako u Haiku 4.5, viz [5r](#5r), spíš horší).
+
+## 5u. Srovnávací test Claude/GPT/Ollama na reálném úkolu – Ollama selhala, agent zrušen (2026-09-17)
+
+Uživatel chtěl reálné srovnání "časy a přesnost" napříč agenty. Zadání identické pro všechny tři (fresh session, bez navázání): najít v 42minutovém přepisu VŠECHNY věty o Olomouci a poskládat je do nové sekvence s mezerou 0,3 s. Ground truth (přesné shody na "olomouc\*" v surovém přepisu) = 25 vět, ale přímé srovnání ukázalo, že i to je neúplné – viz níž.
+
+| Agent/model | Čas | Cena | Nalezeno | Poznámka |
+|---|---|---|---|---|
+| Claude Sonnet | 174,6 s | $0,819 | **45/45** | Sám podchytil 20 vět, kde Whisper "Olomouc" přepsal pokaženě ("volomouci", "Holmuci", "V Folmusi" apod.) – ověřeno ručně proti přepisu, všech 20 skutečně o Olomouci. Žádný falešný nález. |
+| Codex GPT-6-Astra | 90,3 s | nezjištěno (panel cenu Codexu/Ollamy nezobrazuje) | 29/45 | Chytil čistý ground truth (25) + 4 lehčí zkomoleniny, minul 16 nejtěžších. Žádný falešný nález. |
+| Ollama gemma4:e4b | 75,3 s | zdarma | **0/45** | Tvrdilo, že slovo "Olomouc" v přepisu vůbec není, sekvenci nevytvořilo (ověřeno i přes `get_project` – sekvence "BENCH ollama gemma4" v projektu neexistuje). Úplné selhání na reálném úkolu, i když dřív triviální `premiere_status`/`list_project_items` zvládla (5t). |
+
+**Rozhodnutí uživatele: Ollama agent zrušen** ("zruš tu ollamu"). Vráceno v `panel/main.js`: smazána `detectOllama()`/`addOllamaAgent()`, `findExe('ollama')` mapování na codex.exe, `--oss --local-provider ollama` větev v `runAgent()`, ollama položka v `lastModelByAgent`/`setAiIcon`. `README.md` vrácen na původní znění bez zmínky Ollamy. Ponechána jen drobná, obecně užitečná oprava z 5t (nezobrazovat Codexovo "Model metadata for X not found" jako červenou chybu – může nastat i u běžných GPT modelů, ne jen u Ollamy).
+
+**Ponaučení**: lokální 8-9B model (gemma4) fungoval spolehlivě jen na triviální jednokrokové dotazy (5t), ale na skutečném redakčním úkolu (najít a interpretovat věty v dlouhém přepisu) selhal úplně – potvrzuje to očekávání z 5t/5r, jen tvrději, než jsem čekal. GPT-6-Astra byl skoro 2× rychlejší než Claude Sonnet za cenu horšího zachycení těžce zkomolených ASR přepisů; pro úkoly, kde přesnost je kritická (a materiál má víc ASR šumu), zůstává Claude Sonnet lepší volba i za vyšší cenu/čas.
 ## 6. Otevřené úkoly (priorita)
 1. `install.ps1` otestovat na čistém prostředí (2026-09-16: statická revize proběhla, žádné chybějící pip/npm závislosti ani zjevné bugy nenalezeny – `undici`/`opencv-python-headless` se nainstalují automaticky, model `Qwen3-VL` se stáhne v kroku 6b/7 – ale skutečný běh na čistém PC pořád neproběhl). `make_long_test.py`/`transcribe-winrec.mjs` jsou WINREC-specifické (lze smazat).
 2. Diarizace: na nahrávce z místnosti (AMI) ztratily 2 tišší mluvčí úplně, ale na **studiovém zvuku funguje spolehlivě** i na 3 mluvčích (viz sekce 5d – nejde o obecnou slabinu, jen o room-recording scénář). Zavedená oprava pro room-nahrávky by byla **VBx shlukování** (sekce 5b) – netriviální, neimplementováno, a podle 5d možná ani není potřeba tak naléhavě, jak se zdálo. **Pro multicam vždy preferovat `speakerTracks`**, kdykoli je to možné.
