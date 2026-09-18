@@ -363,6 +363,15 @@ Při prvním živém testu `add_captions` na skutečném obsahu (dosud neověře
 
 **Zkontrolováno i jinde**: `transcribe_sequence` mapuje slova na timeline stejným způsobem, ale generuje řádek zvlášť pro každý klip a každou větu, takže text přes střih nikdy nespojí – stejná chyba tam není.
 
+## 5ab. Ověřeno bez nálezu: destruktivní mazání úseků a multicam (2026-09-18)
+
+Po opravě titulků ([5aa](#5aa)) proběhly testy dalších dosud neprověřených oblastí. **Žádná chyba nenalezena** – zapsáno, ať se to netestuje znovu od nuly:
+
+- **`remove_timeline_ranges` (ripple)** – klip 40 s, vyříznuto 10–15 s: délka přesně 35 s, video i audio zůstalo synchronní (stejný start/end/inPoint), žádné mezery, zdrojová návaznost sedí (270 → 275).
+- **`remove_timeline_ranges` s více úseky najednou** (klasické riziko: po smazání prvního se timeline posune a další souřadnice přestanou platit) – klip 60 s, smazáno 5–10, 20–25, 40–45: výsledek 45 s a všechny čtyři zachované úseky zdroje přesně podle očekávání (260–265, 270–280, 285–300, 305–320), stopy synchronní. Nástroj si posun sám správně přepočítává.
+- **`sync_media` proti ground truth** (`test/multicam/gt.json`, synteticky vyrobený set se známými odsazeními): kamery trefeny **na 0,000 s** (wide −2,000 vs −2,0; petr 1,300 vs 1,3; moderátor −0,700 vs −0,7), jistota 20–23 (práh spolehlivosti je 1,5).
+- **`build_multicam_sequence` (dryRun) proti ground truth**: všech 10 promluv přiřazeno správné kameře, konce záběrů sedí na hranice promluv (±0,2 s), prostřihy do celku se vkládají podle `maxShot`, nejkratší záběr 2,4 s (limit `minShot` 1,8 s), `unmappedSpeakers` i `warnings` prázdné. Tím je pokryta poznámka z [5m](#5m) bodu 4, že multicam nebyl v přesnostní kampani testovaný.
+
 ## 6. Otevřené úkoly (priorita)
 1. `install.ps1` otestovat na čistém prostředí (2026-09-16: statická revize proběhla, žádné chybějící pip/npm závislosti ani zjevné bugy nenalezeny – `undici`/`opencv-python-headless` se nainstalují automaticky, model `Qwen3-VL` se stáhne v kroku 6b/7 – ale skutečný běh na čistém PC pořád neproběhl). `make_long_test.py`/`transcribe-winrec.mjs` jsou WINREC-specifické (lze smazat).
 2. Diarizace: na nahrávce z místnosti (AMI) ztratily 2 tišší mluvčí úplně, ale na **studiovém zvuku funguje spolehlivě** i na 3 mluvčích (viz sekce 5d – nejde o obecnou slabinu, jen o room-recording scénář). Zavedená oprava pro room-nahrávky by byla **VBx shlukování** (sekce 5b) – netriviální, neimplementováno, a podle 5d možná ani není potřeba tak naléhavě, jak se zdálo. **Pro multicam vždy preferovat `speakerTracks`**, kdykoli je to možné.
