@@ -241,10 +241,18 @@
   });
 
   // Poslední vybraný model si pamatuje zvlášť pro každého agenta, ať uživatel o volbu
-  // nepřijde při přepnutí Claude <-> Codex a zpátky.
-  var lastModelByAgent = { claude: '', codex: '' };
-  try { lastModelByAgent.claude = localStorage.getItem('pmcp.model.claude') || ''; } catch (e) {}
-  try { lastModelByAgent.codex = localStorage.getItem('pmcp.model.codex') || ''; } catch (e) {}
+  // nepřijde při přepnutí Claude <-> Codex a zpátky. Dokud si uživatel u Claude sám nic
+  // nevybere, výchozí je Haiku 4.5 - ve srovnávacím testu (HANDOFF 5v) vyšel jako nejrychlejší
+  // a nejlevnější, s přesností srovnatelnou nebo lepší než Opus.
+  var lastModelByAgent = { claude: 'haiku', codex: '' };
+  try {
+    var savedClaude = localStorage.getItem('pmcp.model.claude');
+    if (savedClaude !== null) lastModelByAgent.claude = savedClaude;
+  } catch (e) {}
+  try {
+    var savedCodex = localStorage.getItem('pmcp.model.codex');
+    if (savedCodex !== null) lastModelByAgent.codex = savedCodex;
+  } catch (e) {}
 
   function updateModelOptions() {
     var agent = $('agent').value;
