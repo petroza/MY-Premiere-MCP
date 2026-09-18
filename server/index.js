@@ -894,7 +894,10 @@ tool(
     if (leadIn > 0) {
       let prevEnd = 0;
       for (const c of cues) {
-        c.t0 = Math.max(prevEnd, c.t0 - leadIn);
+        // Predsazeni nikdy nesmi prelezt ani konec predchoziho titulku, ani zacatek vlastniho
+        // klipu - jinak by se titulek dalsiho zaberu objevil jeste nad predchozim obrazem.
+        const clipStart = clips[c.clip] ? clips[c.clip].start : 0;
+        c.t0 = Math.max(prevEnd, clipStart, c.t0 - leadIn);
         prevEnd = c.t1;
       }
     }
