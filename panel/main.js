@@ -186,9 +186,6 @@
     loadHost().then(function (ok) { log(ok ? 'host.jsx znovu načten' : 'host.jsx NEnačten'); });
   });
 
-  $('openInstrukce').addEventListener('click', function () {
-    cp.exec('start "" "' + path.join(ROOT, 'EXTERNI_AI_INSTRUKCE.md') + '"');
-  });
   $('tplExport').addEventListener('click', function () {
     $('prompt').value = 'Exportuj analýzu videa (nástroj export_analysis): ';
     $('prompt').focus();

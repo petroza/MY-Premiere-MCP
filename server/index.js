@@ -1261,8 +1261,8 @@ tool('get_outline', 'Vrátí uloženou osnovu z analyze_transcript.', { path: z.
 
 tool(
   'export_analysis',
-  'Uloží osnovu a celý přepis (s indexy slov) do jednoho čitelného .md souboru – pro použití mimo Claude (např. vložit do ChatGPT). ' +
-    'Společně s tím pošli i EXTERNI_AI_INSTRUKCE.md z kořene projektu (vysvětluje formát a co má externí AI vrátit).',
+  'Uloží kompletní, samostatný .md soubor (instrukce + osnova + celý přepis) pro použití mimo Claude – ' +
+    'stačí ho vložit do ChatGPT (nebo jiné AI) v jedné zprávě, sama pozná, co má dělat, a zeptá se uživatele, co chce nastříhat.',
   {
     path: z.string().describe('Zdroj (musí mít uložený přepis, ideálně i analyze_transcript)'),
     output: z.string().optional().describe('Kam uložit .md (výchozí = vedle zdroje)'),
@@ -1279,16 +1279,25 @@ tool(
       const ws = (s.words || []).map((w, i) => `${i}:${w.w}`).join(' ');
       return `${segLine(s)}${ws ? `\n    slova: ${ws}` : ''}`;
     });
+    // Instrukce se vkládají přímo do exportu (jeden soubor, jedna zpráva do ChatGPT) - dřív si je
+    // uživatel musel otevřít a vložit zvlášť, což bylo krokem navíc a matlo to.
+    const instrukce = fs.readFileSync(path.join(ROOT, 'EXTERNI_AI_INSTRUKCE.md'), 'utf8');
     const out = [
-      `# Přepis a osnova: ${path.basename(p)}`,
+      instrukce.trim(),
       '',
-      '(Vygenerováno nástrojem export_analysis. Instrukce pro externí AI: viz EXTERNI_AI_INSTRUKCE.md.)',
+      '---',
+      '',
+      `# Přepis a osnova: ${path.basename(p)}`,
       '',
       '## Osnova',
       outline,
       '',
       '## Plný přepis',
       ...lines,
+      '',
+      '---',
+      '',
+      'Teď se uživatele zeptej česky, co chce nastříhat (jakou délku, o čem, styl) – teprve pak vrať JSON plán podle formátu výše.',
     ].join('\n');
     const dest = output ? path.resolve(output) : `${p}.analyza.md`;
     fs.writeFileSync(dest, out, 'utf8');

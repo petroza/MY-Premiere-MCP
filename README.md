@@ -59,7 +59,7 @@ Výsledek je obyčejná sekvence (V1 = obraz kamer bez jejich zvuku, A1 = hlavn�
 | Přepis a mluvčí | `transcribe_media`, `transcribe_sequence`, `get_transcript`, `search_transcript`, `find_pauses`, `diarize_media`, `rename_speakers` |
 | Porozumění (lokálně) | `analyze_transcript`, `get_outline`, `plan_edit_local` |
 | Obrazová analýza | `get_frame` (vrátí snímek jako obrázek – pro Claude vidění), `describe_frame` (popis lokálním vision modelem Qwen3-VL, zdarma) |
-| Externí AI (ChatGPT apod.) | `export_analysis` (uloží osnovu+přepis do .md), `build_from_plan` (sestříhá podle JSON plánu od jiné AI) – viz `EXTERNI_AI_INSTRUKCE.md` |
+| Externí AI (ChatGPT apod.) | `export_analysis` (jeden samostatný .md soubor – instrukce z `EXTERNI_AI_INSTRUKCE.md` + osnova + přepis, stačí vložit celý do ChatGPT v jedné zprávě), `build_from_plan` (sestříhá podle JSON plánu, co AI vrátí) |
 | Střih (nedestruktivní) | `build_sequence_from_transcript`, `build_sequence_without_pauses`, `build_sequence`, `build_multicam_sequence`, `sync_media` |
 | Detekce střihu (obraz) | `detect_scene_cuts` (najde skutečné vizuální řezy kamer zapečené v jednom zdroji – Premierina Scene Edit Detection, jen na výslovné přání) |
 | Titulky | `add_captions` (vygeneruje české titulky z přepisu podle aktuálního stavu timeline a přidá nativní titulkovou stopu do Premiery) |

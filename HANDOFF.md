@@ -316,6 +316,24 @@ Uživatel se ptal, jestli dva nové otevřené ASR modely z roku 2026 (vydané p
 
 **Závěr: `large-v3` zůstává výchozí, žádný z kandidátů nenasazovat.** Parakeet je nadějný na rychlost a v jednom místě (`vítání`) opravil chybu, kterou má Whisper v cache dodnes, ale na těžkých slovech je stejně nespolehlivý jako Whisper (jen jinak) a bez extra konfigurace (chunking/`max_new_tokens`) tiše ořezává delší segmenty – to by v produkci znamenalo ztracený konec vět bez varování, nepřijatelné pro střih. Qwen3-ASR byl na těžkých slovech viditelně horší než oba ostatní (ztráta obsahu, ne jen překlepy) a pomalejší. Ani jeden model se nezkoušel dál doladit (žádné vlastní `chunk_length_s`/`max_new_tokens` tuning, žádný pokus o batch/streaming) – kdyby uživatel chtěl, dá se to prohloubit, ale na první reálný test ani jeden nepřeváží náklady na výměnu za `large-v3`. Stažené váhy a `asr_test_venv` ponechány ve scratchpadu pro případné další zkoušení, dočasné WAV segmenty smazány.
 
+## 5x. Audio vstup do Claude/GPT – ověřeno, že to (zatím) nejde (2026-09-18)
+
+Uživatel navrhl posílat zvuk přímo do Claude (nebo GPT přes Codex) místo Whisperu, s tím že by to bylo přesnější za cenu víc kreditů. Ověřeno přímo v aktuální dokumentaci/datech, ne z paměti:
+
+- **Claude API**: skill `claude-api` (aktuálně udržovaný referenční zdroj) nezmiňuje žádný typ obsahu pro zvuk – jen text, obrázky (vidění) a dokumenty (PDF). Žádný "audio"/"speech" content-block type v Messages API neexistuje.
+- **Codex CLI (GPT v panelu)**: `codex exec --help` nabízí jen `-i/--image` pro přílohy, žádnou obdobu pro zvuk. Navíc katalog modelů (`codex debug models --bundled`, stejná data jako u výběru modelů v [5p](#5p)) má u **všech 11 modelů** `"input_modalities":["text","image"]` – zvuk není podporovaný ani u jednoho.
+
+**Závěr: nejde to ani u Claude, ani u GPT v naší integraci.** OpenAI sice jinde audio-vstupní modely má (`gpt-4o-audio-preview` apod.), ale ty nejsou dostupné přes `codex exec` – šlo by je zapojit jen přímým voláním OpenAI API, což by byla úplně nová, samostatná integrace, ne rozšíření stávající. Whisper zůstává jediná cesta k přepisu v tomhle projektu; uživatel byl nasměrován zpátky k fine-tuning nápadu (viz otázka před 5h/5w) jako reálnější cestě ke zlepšení přesnosti.
+
+## 5y. `export_analysis` – instrukce pro externí AI sloučeny do jednoho souboru (2026-09-18)
+
+Uživatel: dosavadní záložní postup (samostatné tlačítko "Otevřít instrukce pro AI" + zvlášť exportovaná analýza) vyžadoval dvě různá vložení do ChatGPT a bylo to matoucí ("to tlačítko nefunguje"). Chtěl **jeden** stažený/exportovaný `.md` soubor, který si ChatGPT po vložení hned sám vyloží a rovnou se zeptá, co chce uživatel nastříhat.
+
+- `export_analysis` (`server/index.js`) teď na začátek vygenerovaného souboru vloží **celý obsah `EXTERNI_AI_INSTRUKCE.md`** (čte ho při každém běhu ze souboru, žádná duplikace textu – ten zůstává jediným zdrojem pravdy) a na konec (za osnovu a plný přepis) přidá větu: *"Teď se uživatele zeptej česky, co chce nastříhat..., teprve pak vrať JSON plán."* – jedna zpráva do ChatGPT stačí na všechno.
+- `EXTERNI_AI_INSTRUKCE.md` upraven (odstraněna zmínka o "dalších zprávách", teď počítá s tím, že vše přijde v jednom souboru/zprávě).
+- `panel/index.html`: tlačítko "📋 Otevřít instrukce pro AI" (a jeho handler v `main.js`, který jen otevíral soubor přes `cp.exec('start ...')`) odstraněno jako nadbytečné – zbyly jen 2 kroky (export → vložit do AI → uložit odpověď → sestříhat podle plánu) místo 3.
+- **Ověřeno naostro** (izolovaně přes `claude -p`, mimo živý panel): vygenerovaný `.analyza.md` (362 vět, 139 KB) má instrukce na začátku a výzvu "zeptej se uživatele" na úplném konci, přesně jak bylo požadováno.
+
 ## 6. Otevřené úkoly (priorita)
 1. `install.ps1` otestovat na čistém prostředí (2026-09-16: statická revize proběhla, žádné chybějící pip/npm závislosti ani zjevné bugy nenalezeny – `undici`/`opencv-python-headless` se nainstalují automaticky, model `Qwen3-VL` se stáhne v kroku 6b/7 – ale skutečný běh na čistém PC pořád neproběhl). `make_long_test.py`/`transcribe-winrec.mjs` jsou WINREC-specifické (lze smazat).
 2. Diarizace: na nahrávce z místnosti (AMI) ztratily 2 tišší mluvčí úplně, ale na **studiovém zvuku funguje spolehlivě** i na 3 mluvčích (viz sekce 5d – nejde o obecnou slabinu, jen o room-recording scénář). Zavedená oprava pro room-nahrávky by byla **VBx shlukování** (sekce 5b) – netriviální, neimplementováno, a podle 5d možná ani není potřeba tak naléhavě, jak se zdálo. **Pro multicam vždy preferovat `speakerTracks`**, kdykoli je to možné.

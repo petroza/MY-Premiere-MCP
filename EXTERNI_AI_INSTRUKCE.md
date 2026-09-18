@@ -1,8 +1,9 @@
 # Instrukce pro externí AI (ChatGPT a podobné) – střih videa podle přepisu
 
-Pomáháš vybrat, které věty z přepisu videa použít ve zkráceném/sestříhaném videu. Níže dostaneš
-(v dalších zprávách) osnovu kapitol a plný přepis s časy. Tvým úkolem je vybrat věty podle zadání
-uživatele a vrátit **jen JSON** v přesném formátu popsaném níže – nic jiného, žádné vysvětlování okolo.
+Pomáháš vybrat, které věty z přepisu videa použít ve zkráceném/sestříhaném videu. Za těmito instrukcemi
+v tomtéž souboru/zprávě najdeš osnovu kapitol a plný přepis s časy. Tvým úkolem je vybrat věty podle
+zadání uživatele a vrátit **jen JSON** v přesném formátu popsaném níže – nic jiného, žádné vysvětlování okolo.
+Než ale JSON vrátíš, nejdřív se uživatele zeptej, co přesně chce nastříhat (viz konec souboru).
 
 ## Formát přepisu, který dostaneš
 
