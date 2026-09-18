@@ -6,6 +6,13 @@
 <style>
   :root { --bg:#1d1d1d; --panel:#262626; --line:#353535; --text:#d6d6d6; --dim:#8a8a8a; --accent:#6f8cff; --ok:#43c26b; --err:#e0584f; --tool:#c9a54a; }
   * { box-sizing:border-box; }
+  * { scrollbar-width:thin; scrollbar-color:var(--line) var(--bg); }
+  *::-webkit-scrollbar { width:9px; height:9px; }
+  *::-webkit-scrollbar-track { background:var(--bg); }
+  *::-webkit-scrollbar-thumb { background:var(--line); border-radius:5px; border:2px solid var(--bg); background-clip:padding-box; }
+  *::-webkit-scrollbar-thumb:hover { background:var(--dim); background-clip:padding-box; }
+  *::-webkit-scrollbar-button { display:none; height:0; width:0; }
+  *::-webkit-scrollbar-corner { background:var(--bg); }
   html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:12px/1.45 "Segoe UI",Tahoma,sans-serif; }
   body { display:flex; flex-direction:column; padding:8px; gap:8px; }
   header { display:flex; align-items:center; gap:8px; }
