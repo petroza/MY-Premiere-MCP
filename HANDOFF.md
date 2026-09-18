@@ -334,6 +334,23 @@ Uživatel: dosavadní záložní postup (samostatné tlačítko "Otevřít instr
 - `panel/index.html`: tlačítko "📋 Otevřít instrukce pro AI" (a jeho handler v `main.js`, který jen otevíral soubor přes `cp.exec('start ...')`) odstraněno jako nadbytečné – zbyly jen 2 kroky (export → vložit do AI → uložit odpověď → sestříhat podle plánu) místo 3.
 - **Ověřeno naostro** (izolovaně přes `claude -p`, mimo živý panel): vygenerovaný `.analyza.md` (362 vět, 139 KB) má instrukce na začátku a výzvu "zeptej se uživatele" na úplném konci, přesně jak bylo požadováno.
 
+## 5z. Instalace na cizím PC nefungovala – nalezena příčina + offline instalační balík (2026-09-18)
+
+Uživatel: "zkoušel jsem to v práci nainstalovat a nefungovalo to". Místo hádání jsem prošel, co se při kopírování projektu jinam rozbije:
+
+**Nalezená příčina: `mcp.json` měl natvrdo `O:/MYpremiereMCP/server/index.js`.** Po zkopírování projektu na jiný disk/cestu ukazoval panel (větev Claude, `--mcp-config mcp.json`) na neexistující soubor, takže se nástroje vůbec nepřipojily. Původní `install.ps1` tohle neřešil a ani nijak nekontroloval. (Stejné natvrdo psané cesty jsou i ve `scripts/*.mjs`, ale ty jsou jen vývojářské, do instalace nevstupují.)
+
+**Nový balík `INSTALL/`** (původní `install.ps1` v kořeni zůstal nedotčený):
+- `instalace.bat` – jediný soubor k poklepání; přepínače `-CheckOnly`, `-NoLocalLLM`, `-SkipModels` pro příkazovou řádku.
+- `install.ps1` – tři fáze: **kontroly → instalace → ověření**. Kontroly (soubory projektu, místo na disku, Node 18+, Python 3.11, curl/tar, síť nebo offline balík, `%APPDATA%` na síťovém disku, Premiere, GPU, porty) běží PŘED jakoukoli změnou, takže při problému nezůstane rozdělaná půlka instalace. Každá chyba vypisuje i konkrétní návod. Po instalaci se ověří i funkčnost (importy Python balíčků, velikosti modelů, propojení panelu, klíč v registru, platnost `mcp.json`). Vše se loguje do `INSTALL/install-log.txt` (v `.gitignore`).
+- **Přegenerování `mcp.json` podle skutečného kořene** – vlastní oprava té příčiny výše.
+- **Offline balík `INSTALL/offline/` (~15 GB)**: modely (Whisper, diarizace, gemma3 12B, Qwen3-VL), `tools/llama.cpp`, Python wheels (`pip download`, 30 souborů) a `node_modules`. Když složka existuje, instalace nepotřebuje internet vůbec; když chybí, chová se jako dřív a stahuje. Do balíku se záměrně NEDÁVAL český Whisper fine-tune (2,9 GB, podle [5h](#5h) horší a nepoužívá se). Složky `models/`, `tools/`, `node_modules/` jsou v `.gitignore` bez lomítka na začátku, takže se `INSTALL/offline/**` do gitu nedostane.
+- Bez NVIDIA GPU si instalátor sám přepne Whisper na CPU (`device=cpu`, `compute=int8`).
+
+**Dvě reálné chyby, které jsem při psaní udělal a odchytil testem** (stojí za zapamatování):
+1. `Set-Content -Encoding UTF8` ve Windows PowerShellu 5.1 píše **BOM**, a ten rozbije `JSON.parse` v Node i `json.load` v Pythonu – vygenerovaný `mcp.json` by konfiguraci shodil. Opraveno na `[IO.File]::WriteAllText` s `UTF8Encoding($false)`.
+2. Zápis `config.json` přes `ConvertFrom-Json`/`ConvertTo-Json` round-trip hrozí u jednoprvkových polí (`"python": [".venv/..."]`) změnou na skalár → rozbitý config. Nahrazeno cílenou záměnou v textu (jen `device`/`compute`), ověřeno, že pole zůstane polem.
+
 ## 6. Otevřené úkoly (priorita)
 1. `install.ps1` otestovat na čistém prostředí (2026-09-16: statická revize proběhla, žádné chybějící pip/npm závislosti ani zjevné bugy nenalezeny – `undici`/`opencv-python-headless` se nainstalují automaticky, model `Qwen3-VL` se stáhne v kroku 6b/7 – ale skutečný běh na čistém PC pořád neproběhl). `make_long_test.py`/`transcribe-winrec.mjs` jsou WINREC-specifické (lze smazat).
 2. Diarizace: na nahrávce z místnosti (AMI) ztratily 2 tišší mluvčí úplně, ale na **studiovém zvuku funguje spolehlivě** i na 3 mluvčích (viz sekce 5d – nejde o obecnou slabinu, jen o room-recording scénář). Zavedená oprava pro room-nahrávky by byla **VBx shlukování** (sekce 5b) – netriviální, neimplementováno, a podle 5d možná ani není potřeba tak naléhavě, jak se zdálo. **Pro multicam vždy preferovat `speakerTracks`**, kdykoli je to možné.

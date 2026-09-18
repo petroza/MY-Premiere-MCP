@@ -6,6 +6,9 @@ tools/
 # stažené modely (viz install.ps1, README tabulka modelů)
 models/
 
+# offline instalační balík (~15 GB: modely, llama.cpp, wheels, node_modules) – generuje se, nepatří do gitu
+INSTALL/offline/
+
 # běhová cache (přepisy, diarizace, analýzy, joby, logy)
 cache/
 
@@ -15,6 +18,7 @@ test/
 # lokální stav nástrojů
 .claude/
 panel/.debug
+INSTALL/install-log.txt
 *.bak-*
 *.log
 __pycache__/
