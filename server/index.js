@@ -847,16 +847,18 @@ tool(
     for (const src of sources) transcripts[src] = (await transcribe(src, a, extra)).data;
 
     const words = [];
-    for (const c of clips) {
+    clips.forEach((c, ci) => {
       const tr = transcripts[c.mediaPath];
       const speed = c.speed || 1;
       const map = (t) => c.start + (t - c.inPoint) / speed;
       for (const s of tr.segments) {
         for (const w of s.words || []) {
-          if (w.s >= c.inPoint - 0.01 && w.e <= c.outPoint + 0.01) words.push({ t0: map(w.s), t1: map(w.e), text: w.w });
+          // clip = ze kterého klipu na timeline slovo pochází; titulek se na střihu musí zalomit,
+          // jinak by jeden titulek mísil text ze dvou různých míst zdroje (viz split níž).
+          if (w.s >= c.inPoint - 0.01 && w.e <= c.outPoint + 0.01) words.push({ t0: map(w.s), t1: map(w.e), text: w.w, clip: ci });
         }
       }
-    }
+    });
     words.sort((x, y) => x.t0 - y.t0);
     if (!words.length) throw new Error('V sekvenci nejsou žádná rozpoznaná slova k titulkování.');
 
@@ -871,9 +873,13 @@ tool(
       const text = cur ? `${cur.text} ${w.text}` : w.text;
       const gapTooBig = cur && w.t0 - cur.t1 > gapSplit;
       const tooLong = cur && (text.length > maxChars || w.t1 - cur.t0 > maxSec);
-      if (!cur || gapTooBig || tooLong) {
+      // Na střihu se titulek vždy zalomí: u těsných střihů (což je po ladění hranic běžné) mezi
+      // posledním slovem jednoho klipu a prvním slovem dalšího prakticky není mezera, takže by
+      // gapTooBig nezabral a jeden titulek by ukazoval text ze dvou nesouvisejících pasáží.
+      const clipChanged = cur && w.clip !== cur.clip;
+      if (!cur || gapTooBig || tooLong || clipChanged) {
         if (cur) cues.push(cur);
-        cur = { t0: w.t0, t1: w.t1, text: w.text };
+        cur = { t0: w.t0, t1: w.t1, text: w.text, clip: w.clip };
       } else {
         cur.t1 = w.t1;
         cur.text = text;

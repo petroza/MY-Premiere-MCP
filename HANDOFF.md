@@ -351,6 +351,18 @@ Uživatel: "zkoušel jsem to v práci nainstalovat a nefungovalo to". Místo há
 1. `Set-Content -Encoding UTF8` ve Windows PowerShellu 5.1 píše **BOM**, a ten rozbije `JSON.parse` v Node i `json.load` v Pythonu – vygenerovaný `mcp.json` by konfiguraci shodil. Opraveno na `[IO.File]::WriteAllText` s `UTF8Encoding($false)`.
 2. Zápis `config.json` přes `ConvertFrom-Json`/`ConvertTo-Json` round-trip hrozí u jednoprvkových polí (`"python": [".venv/..."]`) změnou na skalár → rozbitý config. Nahrazeno cílenou záměnou v textu (jen `device`/`compute`), ověřeno, že pole zůstane polem.
 
+## 5aa. Titulky přebíhaly přes střih – reálný bug nalezen a opraven (2026-09-18)
+
+Při prvním živém testu `add_captions` na skutečném obsahu (dosud neověřeno, viz [5i](#5i)) se ukázalo, že **jeden titulek umí spojit text ze dvou různých klipů přes střih**. Testovací sekvence (věty 43+44 a 55+56, střih na 14,12 s) vyrobila titulek `10,750 → 14,910` s textem *„…tristní situace s parkováním. **Bavíme se o**"* – tedy 0,79 s za střihem a s prvními slovy druhého klipu. Divák vidí titulek s textem dalšího záběru ještě před střihem a titulek pokračuje i po něm.
+
+**Příčina**: v `add_captions` se slova ze všech klipů slila do jednoho plochého seznamu seřazeného podle času timeline a **informace o původním klipu se zahodila**. Titulek se lámal jen podle mezery > 0,6 s, délky textu a max. délky. Jenže na střihu mezera prakticky není – a čím přesnější jsou hranice střihu (což bylo cílem celého ladění v [5k](#5k)/[5m](#5m)/[5n](#5n)), tím spolehlivěji `gapTooBig` nezabere. Zlepšení přesnosti střihu tedy tuhle chybu paradoxně dělalo pravděpodobnější.
+
+**Oprava**: každé slovo si nese index klipu (`clip: ci`) a v sestavování titulků přibyla podmínka `clipChanged` – na střihu se titulek vždy zalomí.
+
+**Ověřeno naostro** (čerstvá sekvence, aby se netestovalo přes starou pojistku): titulek 3 nově `10,750 → 14,030` (končí před střihem, text končí u „…s parkováním.") a titulek 4 `14,090 → 19,810` začíná „Bavíme se o drhém bydlení…". Počet titulků zůstal 8, žádný text nechybí. `leadIn` (0,12 s) zůstává ošetřený clampem na konec předchozího titulku, takže přes střih nepřetáhne.
+
+**Zkontrolováno i jinde**: `transcribe_sequence` mapuje slova na timeline stejným způsobem, ale generuje řádek zvlášť pro každý klip a každou větu, takže text přes střih nikdy nespojí – stejná chyba tam není.
+
 ## 6. Otevřené úkoly (priorita)
 1. `install.ps1` otestovat na čistém prostředí (2026-09-16: statická revize proběhla, žádné chybějící pip/npm závislosti ani zjevné bugy nenalezeny – `undici`/`opencv-python-headless` se nainstalují automaticky, model `Qwen3-VL` se stáhne v kroku 6b/7 – ale skutečný běh na čistém PC pořád neproběhl). `make_long_test.py`/`transcribe-winrec.mjs` jsou WINREC-specifické (lze smazat).
 2. Diarizace: na nahrávce z místnosti (AMI) ztratily 2 tišší mluvčí úplně, ale na **studiovém zvuku funguje spolehlivě** i na 3 mluvčích (viz sekce 5d – nejde o obecnou slabinu, jen o room-recording scénář). Zavedená oprava pro room-nahrávky by byla **VBx shlukování** (sekce 5b) – netriviální, neimplementováno, a podle 5d možná ani není potřeba tak naléhavě, jak se zdálo. **Pro multicam vždy preferovat `speakerTracks`**, kdykoli je to možné.
