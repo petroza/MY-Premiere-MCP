@@ -90,14 +90,14 @@
     <select id="agent">
       <option value="claude">Claude Code</option>
       <option value="codex">Codex (GPT)</option>
+      <option value="hermes">Hermes (lokálně, zdarma)</option>
     </select>
     <select id="model" title="Model">
       <option value="">výchozí model</option>
       <option value="opus" data-agent="claude">Opus</option>
-      <option value="sonnet" data-agent="claude">Sonnet</option>
-      <option value="haiku" data-agent="claude" selected>Haiku 4.5</option>
+      <option value="sonnet" data-agent="claude" selected>Sonnet</option>
       <!-- Ověřeno naostro 2026-09-17 (`codex debug models --bundled`, visibility:"list"); při rozjetí modelů zkontroluj znovu. -->
-      <option value="gpt-6-astra" data-agent="codex">GPT-6-Astra</option>
+      <option value="gpt-6-astra" data-agent="codex">GPT-6-Astra (drahé)</option>
       <option value="gpt-5.6-sol" data-agent="codex">GPT-5.6-Sol</option>
       <option value="gpt-5.6-terra" data-agent="codex">GPT-5.6-Terra</option>
       <option value="gpt-5.6-luna" data-agent="codex">GPT-5.6-Luna</option>
@@ -132,7 +132,17 @@
         <option value="2" selected>dvouřádkové</option>
       </select>
     </label>
-    <button id="addCaptions" title="Vygeneruje české titulky z přepisu podle aktuálního stavu sekvence a přidá je do Premiery jako titulkovou stopu. Spustit až po hotovém střihu.">💬 Přidat titulky</button>
+    <label class="row" title="Jazyk titulků: jen přepis (jak se mluví), nebo rovnou přeložené do češtiny (lokální model, zdarma) – řeč může být v jakémkoli jazyce i jejich mixu">jazyk
+      <select id="ccLang">
+        <option value="" selected>jen přepis</option>
+        <option value="cs">překlad do češtiny</option>
+      </select>
+    </label>
+    <button id="addCaptions" title="Vygeneruje titulky z přepisu podle aktuálního stavu sekvence (případně přeložené do češtiny) a přidá je do Premiery jako titulkovou stopu. Spustit až po hotovém střihu.">💬 Přidat titulky</button>
+  </div>
+  <div class="row">
+    <button id="importVideo" title="Vloží video do projektu. MKV/WebM nejdřív převede na MP4 (na MKV Premiere padá už při importu); obraz se jen přebalí bez ztráty, poškozený soubor se opraví překódováním. Přepis se dělá z originálu, nic se nepřepisuje znovu.">🎬 Vložit video…</button>
+    <span class="dim">MKV se samo převede na MP4</span>
   </div>
 
   <details>

@@ -197,11 +197,61 @@
 
   $('addCaptions').addEventListener('click', function () {
     if (child) { out('Nejdřív počkej, až agent doběhne (nebo klikni Stop).', 'err'); return; }
-    var chars = $('ccChars').value;
-    var lines = $('ccLines').value;
-    $('prompt').value = 'Zavolej nástroj add_captions na aktivní sekvenci s parametry charsPerLine=' + chars +
-      ', lines=' + lines + '. Nic jiného nedělej, jen mi řekni výsledek (kolik titulků a jaké je znění).';
-    runAgent();
+    var chars = Number($('ccChars').value);
+    var lines = Number($('ccLines').value);
+    var lang = $('ccLang').value;
+    var a = { charsPerLine: chars, lines: lines };
+    if (lang) a.translate = lang;
+    // přímo bez agenta – jde o jedno mechanické volání (dřív přes Clauda: kredity + ~10 s navíc)
+    runTool('Titulky do aktivní sekvence' + (lang ? ' (přeložené do češtiny)' : ''), 'add_captions', a);
+  });
+
+  // Vložení videa přes panel: MKV/WebM Premiere shodí už při importu – server je nejdřív převede na MP4
+  // (import_media -> premiereMedia -> worker/media.py). Přímo bez agenta, jde o mechanický úkon.
+  // Moderní okno Windows pro výběr souborů (jako v Průzkumníku). window.cep.fs.showOpenDialogEx ukazuje staré
+  // okno ze 90. let – proto OpenFileDialog z .NET přes PowerShell (AutoUpgradeEnabled = moderní IFileDialog).
+  // Neblokuje panel; poslední složka se pamatuje.
+  var picking = false;
+  function pickFiles(title, cb) {
+    if (picking) return;
+    var lastDir = '';
+    try { lastDir = localStorage.getItem('importDir') || ''; } catch (e) { /* bez paměti složky */ }
+    var ps = [
+      '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+      'Add-Type -AssemblyName System.Windows.Forms',
+      '$f = New-Object System.Windows.Forms.OpenFileDialog',
+      '$f.Title = ' + JSON.stringify(title).replace(/^"|"$/g, "'"),
+      '$f.Multiselect = $true',
+      '$f.AutoUpgradeEnabled = $true',
+      "$f.Filter = 'Video a zvuk|*.mkv;*.webm;*.mp4;*.mov;*.mxf;*.avi;*.m4v;*.wav;*.mp3;*.m4a|Všechny soubory|*.*'",
+      lastDir ? "$f.InitialDirectory = '" + lastDir.replace(/'/g, "''") + "'" : '',
+      // vlastník TopMost, jinak se okno otevře za Premiere
+      '$o = New-Object System.Windows.Forms.Form -Property @{TopMost = $true; ShowInTaskbar = $false}',
+      "if ($f.ShowDialog($o) -eq 'OK') { $f.FileNames | ForEach-Object { [Console]::Out.WriteLine($_) } }",
+    ].filter(Boolean).join('\n');
+    var enc = Buffer.from(ps, 'utf16le').toString('base64');
+    picking = true;
+    var p = cp.spawn('powershell.exe', ['-NoProfile', '-STA', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', enc],
+      { windowsHide: true });
+    var buf = '';
+    p.stdout.setEncoding('utf8');
+    p.stdout.on('data', function (d) { buf += d; });
+    p.on('error', function (e) { picking = false; out('✖ Okno pro výběr souborů se neotevřelo: ' + e.message, 'err'); });
+    p.on('close', function () {
+      picking = false;
+      var files = buf.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+      if (files.length) { try { localStorage.setItem('importDir', path.dirname(files[0])); } catch (e) { /* nic */ } }
+      cb(files);
+    });
+  }
+
+  $('importVideo').addEventListener('click', function () {
+    if (child) { out('Nejdřív počkej, až předchozí úloha doběhne (nebo klikni Stop).', 'err'); return; }
+    pickFiles('Vložit video do projektu', function (paths) {
+      if (!paths.length || child) return;
+      runTool('Vložit do projektu: ' + paths.map(function (p) { return path.basename(p); }).join(', '),
+        'import_media', { paths: paths, openSequence: true });
+    });
   });
 
   $('undo').addEventListener('click', function () {
@@ -238,16 +288,18 @@
   });
 
   // Poslední vybraný model si pamatuje zvlášť pro každého agenta, ať uživatel o volbu
-  // nepřijde při přepnutí Claude <-> Codex a zpátky. Dokud si uživatel u Claude sám nic
-  // nevybere, výchozí je Haiku 4.5 - ve srovnávacím testu (HANDOFF 5v) vyšel jako nejrychlejší
-  // a nejlevnější, s přesností srovnatelnou nebo lepší než Opus.
-  var lastModelByAgent = { claude: 'haiku', codex: '' };
+  // nepřijde při přepnutí Claude <-> Codex a zpátky. Výchozí je Sonnet: ve srovnávacím testu
+  // na skutečném střihu (HANDOFF 10) dodržel zadanou stopáž a neměl vady, zatímco Haiku 4.5
+  // cílovou délku ignorovalo (339 s místo 180) - proto bylo z nabídky na přání uživatele odstraněno.
+  // Codex: výchozí GPT-5.6-Sol – Astra na stejném střihu spálila ~770 tis. tokenů (2026-09-24), zůstává jen volitelně
+  var lastModelByAgent = { claude: 'sonnet', codex: 'gpt-5.6-sol' };
   try {
     var savedClaude = localStorage.getItem('pmcp.model.claude');
+    if (savedClaude === 'haiku') savedClaude = null; // model už v nabídce není
     if (savedClaude !== null) lastModelByAgent.claude = savedClaude;
   } catch (e) {}
   try {
-    var savedCodex = localStorage.getItem('pmcp.model.codex');
+    var savedCodex = localStorage.getItem('pmcp.model.codex.v2'); // v2: nový výchozí Sol, staré volby neplatí
     if (savedCodex !== null) lastModelByAgent.codex = savedCodex;
   } catch (e) {}
 
@@ -266,7 +318,7 @@
   $('model').addEventListener('change', function () {
     var agent = $('agent').value;
     lastModelByAgent[agent] = $('model').value;
-    try { localStorage.setItem('pmcp.model.' + agent, $('model').value); } catch (e) {}
+    try { localStorage.setItem('pmcp.model.' + agent + (agent === 'codex' ? '.v2' : ''), $('model').value); } catch (e) {}
   });
   updateModelOptions();
 
@@ -489,21 +541,40 @@
     var prompt = $('prompt').value.trim();
     if (!prompt || child) return;
     var agent = $('agent').value;
-    var exe = findExe(agent);
+    // Hermes = lokální model uživatele (O:\Hermes, llama-server :8000). Nejede přes CLI agenta,
+    // ale přes náš skript: vybere věty lokálně a rovnou postaví sekvenci - bez kreditů.
+    var exe = findExe(agent === 'hermes' ? 'node' : agent);
     if (!exe) {
       out(agent === 'claude'
         ? '✖ Claude Code CLI nenalezen v PATH.'
-        : '✖ Codex CLI nenalezen. Nainstaluj: npm install -g @openai/codex a přihlas se (codex login).', 'err');
+        : agent === 'hermes'
+          ? '✖ Node.js nenalezen v PATH (potřebný pro lokální střih).'
+          : '✖ Codex CLI nenalezen. Nainstaluj: npm install -g @openai/codex a přihlas se (codex login).', 'err');
       return;
     }
     if (lastAgent !== agent) sessionId = null;
     lastAgent = agent;
 
     var args;
-    if (agent === 'claude') {
+    if (agent === 'hermes') {
+      args = [path.join(ROOT, 'scripts', 'local-edit.mjs'), 'hermes'];
+    } else if (agent === 'claude') {
       args = ['-p', '--output-format', 'stream-json', '--verbose',
         '--mcp-config', path.join(ROOT, 'mcp.json'), '--strict-mcp-config',
         '--allowedTools', 'mcp__premiere'];
+      // Úsporný režim: z vestavěných nástrojů Claude Code jen ToolSearch (popisy 43 MCP nástrojů ~15k tokenů se
+      // načtou až na vyžádání), krátký vlastní systémový prompt (hybrid: lokální model navrhne, Claude zkontroluje)
+      // a střední úsilí (výchozí hluboké přemýšlení generovalo 4× víc výstupu bez rozdílu ve výsledku).
+      // Změřeno 2026-09-24 na stejném střihu (scripts/compare-agents.mjs): $0.85 / 132 s -> $0.16 / 70 s, kvalita stejná.
+      // Jen u claude.exe: .cmd (npm instalace) jde přes cmd.exe, který víceřádkový argument s uvozovkami rozbije.
+      if (!/\.(cmd|bat)$/i.test(exe)) {
+        try {
+          args.push('--tools=ToolSearch', '--effort', 'medium',
+            '--system-prompt', fs.readFileSync(path.join(ROOT, 'panel', 'agent-system.md'), 'utf8'));
+        } catch (e) {
+          /* bez souboru s promptem běží výchozí režim Claude Code */
+        }
+      }
       if ($('model').value) args.push('--model', $('model').value);
       if ($('pokracovat').checked && sessionId) args.push('--resume', sessionId);
     } else {
@@ -541,6 +612,10 @@
       buf = lines.pop();
       lines.forEach(function (line) {
         if (!line.trim()) return;
+        if (agent === 'hermes') { // prostý text, ne stream JSON
+          out(line, /^✖/.test(line) ? 'err' : /^(⚙|\s)/.test(line) ? 'dim' : 'ai');
+          return;
+        }
         try {
           var ev = JSON.parse(line);
           if (agent === 'claude') handleClaudeEvent(ev); else handleCodexEvent(ev);
@@ -561,6 +636,41 @@
       setAiIcon(null);
     });
   }
+
+  // Přímé spuštění jednoho nástroje bez AI agenta (titulky): mechanická úloha, agent by jen stál kredity
+  // a čas. Výstup i průběh jako u lokálního střihu, Stop funguje stejně.
+  function runTool(label, tool, toolArgs) {
+    if (child) { out('Nejdřív počkej, až předchozí úloha doběhne (nebo klikni Stop).', 'err'); return; }
+    var exe = findExe('node');
+    if (!exe) { out('✖ Node.js nenalezen v PATH.', 'err'); return; }
+    out('› ' + label, 'me');
+    $('run').disabled = true;
+    $('stop').disabled = false;
+    setAiIcon('hermes');
+    child = cp.spawn(exe, [path.join(ROOT, 'scripts', 'run-tool.mjs'), tool, JSON.stringify(toolArgs || {})],
+      { cwd: ROOT, windowsHide: true, env: process.env });
+    var buf = '', errBuf = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', function (d) {
+      buf += d;
+      var lines = buf.split(/\r?\n/);
+      buf = lines.pop();
+      lines.forEach(function (line) {
+        if (line.trim()) out(line, /^✖/.test(line) ? 'err' : /^(⚙|\s)/.test(line) ? 'dim' : 'ai');
+      });
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', function (d) { errBuf = (errBuf + d).slice(-4000); });
+    child.on('error', function (e) { out('✖ ' + e.message, 'err'); });
+    child.on('close', function (code) {
+      if (code && errBuf.trim()) out('✖ ' + errBuf.trim().slice(-1200), 'err');
+      child = null;
+      $('run').disabled = false;
+      $('stop').disabled = true;
+      setAiIcon(null);
+    });
+  }
+
 
   $('run').addEventListener('click', runAgent);
   $('stop').addEventListener('click', function () { stopAgent(); out('■ zastaveno', 'dim'); });

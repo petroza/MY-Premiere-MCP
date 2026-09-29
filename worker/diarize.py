@@ -13,9 +13,69 @@ import time
 import numpy as np
 
 from . import asr
-from .common import CONFIG, cache_file, index_get, index_set, model_path, read_json, write_json
+from .common import CONFIG, ROOT, cache_file, index_get, index_set, log, model_path, read_json, write_json
 
 SR = 16000
+
+
+# ------------------------------------------------------------------ knihovna hlasů (kdo je kdo)
+
+def _library_path():
+    return ROOT / CONFIG.get("diarization", {}).get("voiceLibrary", "models/voices/library.json")
+
+
+def load_voices() -> list[dict]:
+    try:
+        return read_json(_library_path()).get("voices", [])
+    except (OSError, ValueError):
+        return []
+
+
+def save_voices(voices: list[dict]) -> None:
+    write_json(_library_path(), {"version": 1, "voices": voices})
+
+
+def upsert_voice(name: str, vec: list[float], source: str = "") -> None:
+    """Uloží/zprůměruje hlasový otisk pod jménem – příště se mluvčí pozná sám."""
+    voices = load_voices()
+    a = np.asarray(vec, dtype="float32")
+    for v in voices:
+        if v["name"].casefold() == name.casefold():
+            b = np.asarray(v["vec"], dtype="float32")
+            n = int(v.get("n", 1))
+            merged = (b * n + a) / (n + 1)
+            merged = merged / (np.linalg.norm(merged) + 1e-9)
+            v.update(vec=[round(float(x), 5) for x in merged], n=n + 1, updated=time.strftime("%Y-%m-%d"))
+            if source and source not in v.get("sources", []):
+                v.setdefault("sources", []).append(source)
+            break
+    else:
+        voices.append({"name": name, "vec": [round(float(x), 5) for x in a], "n": 1,
+                       "updated": time.strftime("%Y-%m-%d"), "sources": [source] if source else []})
+    save_voices(voices)
+    log(f"Knihovna hlasů: uložen otisk „{name}“")
+
+
+def _match_voices(centroids: dict[str, list[float]], threshold: float) -> dict[str, str]:
+    """Přiřadí shlukům jména z knihovny (nejpodobnější dvojice první, každé jméno jen jednou)."""
+    lib = load_voices()
+    if not lib or not centroids:
+        return {}
+    pairs = []
+    for spk, vec in centroids.items():
+        a = np.asarray(vec, dtype="float32")
+        for entry in lib:
+            b = np.asarray(entry["vec"], dtype="float32")
+            pairs.append((float(a @ b), spk, entry["name"]))
+    pairs.sort(key=lambda p: -p[0])
+    used_spk, used_name, mapping = set(), set(), {}
+    for score, spk, name in pairs:
+        if score < threshold or spk in used_spk or name in used_name:
+            continue
+        mapping[spk] = name
+        used_spk.add(spk)
+        used_name.add(name)
+    return mapping
 
 
 # ------------------------------------------------------------------ metoda "chunks"
@@ -154,12 +214,27 @@ def _diarize_chunks(src: str, tr_file, num: int | None, sim: float, ctx) -> dict
             turns[-1]["end"] = round(b, 3)
         else:
             turns.append({"start": round(a, 3), "end": round(b, 3), "speaker": spk})
+    # průměrný hlasový otisk mluvčího – porovná se s knihovnou hlasů a uloží pro pozdější pojmenování
+    centroids: dict[str, list[float]] = {}
+    for lab in sorted(set(labels.tolist())):
+        v = E[labels == lab].mean(axis=0)
+        v = v / (np.linalg.norm(v) + 1e-9)
+        centroids[name[int(lab)]] = [round(float(x), 5) for x in v]
+    matched = _match_voices(centroids, float(CONFIG.get("diarization", {}).get("voiceMatch", 0.55)))
+    if matched:
+        log(f"Knihovna hlasů: rozpoznáno {matched}")
+        for t in turns:
+            t["speaker"] = matched.get(t["speaker"], t["speaker"])
+        centroids = {matched.get(k, k): v for k, v in centroids.items()}
+
     stats: dict[str, float] = {}
     for t in turns:
         stats[t["speaker"]] = stats.get(t["speaker"], 0.0) + t["end"] - t["start"]
     return {
         "source": os.path.abspath(src),
         "method": "chunks",
+        "centroids": centroids,
+        "matchedVoices": matched,
         "model": CONFIG["models"]["embedding"],
         "duration": round(len(samples) / SR, 3),
         "numSpeakers": len(stats),
@@ -253,10 +328,25 @@ def diarize(params: dict, ctx) -> dict:
             "elapsedSec": data.get("elapsedSec")}
 
 
+def list_voices(params: dict, ctx) -> dict:
+    return {"voices": [{k: v.get(k) for k in ("name", "n", "updated", "sources")} for v in load_voices()],
+            "file": str(_library_path())}
+
+
+def forget_voice(params: dict, ctx) -> dict:
+    name = params["name"]
+    voices = load_voices()
+    left = [v for v in voices if v["name"].casefold() != name.casefold()]
+    save_voices(left)
+    return {"removed": len(voices) - len(left), "remaining": [v["name"] for v in left]}
+
+
 def rename_speakers(params: dict, ctx) -> dict:
-    """Přejmenuje S1/S2… na jména v přepisu i diarizaci."""
+    """Přejmenuje S1/S2… na jména v přepisu i diarizaci; zároveň si zapamatuje hlas (enroll)."""
     mapping = params["mapping"]
-    changed = []
+    enroll = params.get("enroll", True)
+    changed: list[str] = []
+    enrolled: list[str] = []
     for kind in ("transcripts", "diarization"):
         f = index_get(kind, params["path"])
         if not f:
@@ -275,6 +365,16 @@ def rename_speakers(params: dict, ctx) -> dict:
             for t in data["turns"]:
                 t["speaker"] = mapping.get(t["speaker"], t["speaker"])
             data["speakingTime"] = {mapping.get(k, k): v for k, v in data["speakingTime"].items()}
+            cents = data.get("centroids") or {}
+            if cents:
+                data["centroids"] = {mapping.get(k, k): v for k, v in cents.items()}
+                if enroll:
+                    for old, new in mapping.items():
+                        vec = data["centroids"].get(new) or cents.get(old)
+                        if vec:
+                            upsert_voice(new, vec, os.path.basename(params["path"]))
+                            enrolled.append(new)
         write_json(f, data)
         changed.append(str(f))
-    return {"changed": changed}
+    return {"changed": changed, "enrolled": enrolled,
+            "note": "Uložené hlasy se příště rozpoznají samy (diarize_media). Seznam: list_voices."}

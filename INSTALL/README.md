@@ -20,13 +20,28 @@ Co je uvnitř:
 | `offline/models/llm` | gemma3 12B (osnovy, lokální plán střihu) | 6,8 GB |
 | `offline/models/llm-vision` | Qwen3-VL (popis obrazu) | 2,8 GB |
 | `offline/models/diarization` | kdo kdy mluví | 0,1 GB |
-| `offline/tools` | llama.cpp + CUDA runtime | 1,1 GB |
+| `offline/tools/llama.cpp` | llama.cpp + CUDA runtime | 1,1 GB |
+| `offline/models/hermes` | Hermes – Qwen3.6-35B-A3B + mmproj (silnější lokální plánování střihu) | 21,7 GB |
+| `offline/tools/llama.cpp-hermes` | llama.cpp build 11118 pro Hermese | 1,1 GB |
 | `offline/wheels` | Python balíčky (.whl) | 1,4 GB |
 | `offline/node_modules` | Node závislosti | 20 MB |
+
+Celkem ~38 GB, na cílovém disku je potřeba ~39 GB volných (instalátor to zkontroluje předem).
 
 Bez složky `offline` se všechno stáhne z internetu – funguje obojí.
 
 Na cílovém počítači je pořád potřeba mít **Node.js 18+** a **Python 3.11 (64-bit)** – ty balík neobsahuje.
+
+### Hermes po instalaci
+Nainstaluje se, ale **nespouští se sám** (na 12GB GPU by se pral s Whisperem o paměť). Spustíš ho:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\hermes.ps1 start
+```
+
+`plan_edit_local` si ho pak vezme automaticky. Potřebuje NVIDIA GPU s ~12 GB VRAM; na slabším stroji
+poběží na CPU (~9 tok/s), což je pro plánování střihu prakticky nepoužitelné – tam nech plánovat gemma3
+(`backend: "local"`) nebo rovnou Clauda.
 
 ## Volitelné přepínače
 

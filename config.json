@@ -1,6 +1,8 @@
 {
   "port": 7880,
-  "python": [".venv/Scripts/python.exe"],
+  "python": [
+    ".venv/Scripts/python.exe"
+  ],
   "worker": {
     "port": 7881,
     "python": ".venv/Scripts/python.exe"
@@ -10,7 +12,8 @@
     "device": "cuda",
     "compute": "float16",
     "language": "cs",
-    "beamSize": 5
+    "beamSize": 5,
+    "batchSize": 8
   },
   "models": {
     "whisper": "models/whisper-large-v3",
@@ -30,6 +33,20 @@
     "chunkChars": 3200,
     "temperature": 0.1
   },
+  "llmBackends": {
+    "hermes": {
+      "label": "Hermes – Qwen3.6-35B-A3B (součást projektu, port 8000)",
+      "url": "http://127.0.0.1:8000",
+      "model": "dflash",
+      "thinking": false,
+      "temperature": 0,
+      "server": "tools/llama.cpp-hermes/llama-server.exe",
+      "modelFile": "models/hermes/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
+      "mmproj": "models/hermes/mmproj-Qwen3.6-35B-A3B-F16.gguf",
+      "start": "scripts/hermes.ps1",
+      "note": "Model i llama.cpp jsou ve složce projektu. Spouští se ručně: scripts\\hermes.ps1 start (nebo -Vize). Worker ho sám nespouští ani nevypíná a nesahá kvůli němu na GPU – pořadí načítání modelů na 12GB GPU by se jinak pralo s Whisperem."
+    }
+  },
   "llmVision": {
     "server": "tools/llama.cpp/llama-server.exe",
     "port": 7883,
@@ -40,7 +57,9 @@
   "diarization": {
     "threads": 6,
     "threshold": 0.5,
-    "similarity": 0.55
+    "similarity": 0.55,
+    "voiceLibrary": "models/voices/library.json",
+    "voiceMatch": 0.55
   },
   "correctionsFile": "corrections.txt",
   "cacheRoot": "cache",

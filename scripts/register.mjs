@@ -20,9 +20,18 @@ function backup(file) {
 try {
   const claude = execFileSync('where.exe', ['claude'], { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
   let exists = true;
+  let registered = '';
   try {
-    execFileSync(claude, ['mcp', 'get', 'premiere'], { stdio: 'pipe' });
+    registered = execFileSync(claude, ['mcp', 'get', 'premiere'], { stdio: 'pipe', encoding: 'utf8' });
   } catch {
+    exists = false;
+  }
+  // registrace ze staré instalace, která už neexistuje (přesunutá/smazaná složka) – přeregistrovat;
+  // živou jinou instalaci nechat být (např. zkušební instalace nesmí přebrat tu hlavní)
+  const oldPath = (registered.match(/^\s*Args:\s*(.+?)\s*$/m) || [])[1];
+  if (exists && oldPath && !fs.existsSync(oldPath)) {
+    execFileSync(claude, ['mcp', 'remove', 'premiere', '-s', 'user'], { stdio: 'pipe' });
+    console.log(`Claude Code: stará registrace ukazovala na neexistující ${oldPath} – registruji znovu`);
     exists = false;
   }
   if (exists) console.log('Claude Code: "premiere" už je zaregistrovaný');
@@ -40,7 +49,8 @@ const desktop = path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_c
 if (fs.existsSync(desktop)) {
   const cfg = JSON.parse(fs.readFileSync(desktop, 'utf8'));
   cfg.mcpServers ??= {};
-  if (cfg.mcpServers.premiere) console.log('Claude Desktop: už je zaregistrovaný');
+  const dead = cfg.mcpServers.premiere && !fs.existsSync(cfg.mcpServers.premiere.args?.[0] || '');
+  if (cfg.mcpServers.premiere && !dead) console.log('Claude Desktop: už je zaregistrovaný');
   else {
     const b = backup(desktop);
     cfg.mcpServers.premiere = { command: NODE, args: [SERVER] };
@@ -52,10 +62,18 @@ if (fs.existsSync(desktop)) {
 // Codex
 const codex = path.join(os.homedir(), '.codex', 'config.toml');
 if (fs.existsSync(codex)) {
-  const txt = fs.readFileSync(codex, 'utf8');
-  if (/^\[mcp_servers\.premiere\]/m.test(txt)) console.log('Codex: už je zaregistrovaný');
+  let txt = fs.readFileSync(codex, 'utf8');
+  const sect = txt.match(/^\[mcp_servers\.premiere\][^\[]*/m);
+  const codexOld = sect && (sect[0].match(/^args\s*=\s*\["([^"]+)"/m) || [])[1];
+  const codexDead = sect && codexOld && !fs.existsSync(codexOld);
+  if (sect && !codexDead) console.log('Codex: už je zaregistrovaný');
   else {
     const b = backup(codex);
+    if (codexDead) {
+      // registrace ze smazané/přesunuté instalace – nahradit
+      txt = txt.replace(sect[0], '');
+      fs.writeFileSync(codex, txt, 'utf8');
+    }
     const block = `\n[mcp_servers.premiere]\ncommand = "${NODE}"\nargs = ["${SERVER}"]\nstartup_timeout_sec = 20\ntool_timeout_sec = 1800\n`;
     fs.appendFileSync(codex, block, 'utf8');
     console.log(`Codex: zaregistrováno (záloha ${b})`);

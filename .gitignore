@@ -1,7 +1,7 @@
 # závislosti a nástroje (stáhne/nainstaluje install.ps1)
 node_modules/
 .venv/
-tools/
+tools/*
 
 # stažené modely (viz install.ps1, README tabulka modelů)
 models/

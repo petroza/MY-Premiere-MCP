@@ -270,8 +270,16 @@ var PMCP = {};
     app.project.importFiles(a.paths, true, bin, false);
     var res = [];
     for (var j = 0; j < a.paths.length; j++) {
-      try { var it = resolveItem(a.paths[j], false); res.push({ path: a.paths[j], name: it.name, nodeId: it.nodeId }); }
-      catch (e) { res.push({ path: a.paths[j], error: String(e.message || e) }); }
+      try {
+        var it = resolveItem(a.paths[j], false), r = { path: a.paths[j], name: it.name, nodeId: it.nodeId };
+        // "Vložit video…" v panelu: uživatel čeká video na timeline – nová sekvence podle klipu (stejné fps
+        // a rozlišení jako video), jeho rozpracované sekvence se nemění
+        if (a.openSequence && !isAudioOnly(it)) {
+          var sq = app.project.createNewSequenceFromClips(it.name.replace(/\.[^.]+$/, ''), [it], bin);
+          if (sq) { activate(sq); r.sequence = sq.name; }
+        }
+        res.push(r);
+      } catch (e) { res.push({ path: a.paths[j], error: String(e.message || e) }); }
     }
     return res;
   };
@@ -504,14 +512,56 @@ var PMCP = {};
     return { added: true, sequence: seq.name };
   };
 
+  // Hotový zvuk (dabing) na první prázdnou audio stopu sekvence od začátku; původní stopy volitelně ztlumit
+  // (mute – ztlumený originál je už v mixu dabingu, jinak by zněl dvakrát).
   api.detectSceneCuts = function (a) {
     needProject();
     if (!a.source) throw new Error('Missing source');
     var item = resolveItem(a.source, true);
-    var seq = app.project.createNewSequenceFromClips('SCENE DETECT ' + item.name, [item], app.project.getInsertionBin());
+    var seqName = 'SCENE DETECT ' + item.name, seq = null, k;
+    if (a.ranges && a.ranges.length) {
+      // okna se vejdou do už existující pracovní sekvence téhož zdroje – každé volání by jinak přidalo další
+      // "SCENE DETECT" sekvenci do projektu (smazat přes API nejdou)
+      var all = app.project.sequences;
+      // Premiere při vytvoření z názvu klipu odřízne příponu ("…zdravi.mp4.mp4" -> "…zdravi.mp4")
+      for (k = 0; k < all.numSequences; k++) {
+        if (all[k].name.indexOf('SCENE DETECT ') === 0 && seqName.indexOf(all[k].name) === 0) { seq = all[k]; break; }
+      }
+    }
+    var reused = !!seq;
+    if (!seq) seq = app.project.createNewSequenceFromClips(seqName, [item], app.project.getInsertionBin());
     if (!seq) throw new Error('Nepodařilo se vytvořit dočasnou sekvenci.');
-    var vt = seq.videoTracks[0].clips[0];
+    var vt = seq.videoTracks[0].clips.numItems ? seq.videoTracks[0].clips[0] : null;
     var at = seq.audioTracks[0] && seq.audioTracks[0].clips.numItems ? seq.audioTracks[0].clips[0] : null;
+    if (a.ranges && a.ranges.length) {
+      // jen okna kolem hranic klipů: úseky za sebou (mezera 1 s), vybrat všechny, detekce jednou.
+      // Detekce přes celý zdroj neroste lineárně (120 s zdroje ~30 s, 350 s přes 10 min).
+      // Konec zdroje: z plného klipu nově vytvořené sekvence; u znovu použité hlídá rozsah volající (přepis).
+      var srcEnd = (!reused && vt) ? vt.outPoint.seconds : 1e9, placed = [], cursor = 0, i, j;
+      clearSequence(seq);
+      for (i = 0; i < a.ranges.length; i++) {
+        var f = Math.max(0, Number(a.ranges[i].from) || 0);
+        var t = Math.min(srcEnd, Number(a.ranges[i].to) || srcEnd);
+        if (t - f < 0.5) continue;
+        placeRange(seq, item, f, t, cursor, 'video', 0);
+        placed.push([r3(f), r3(t)]);
+        cursor += (t - f) + 1;
+      }
+      var vclips = seq.videoTracks[0].clips;
+      for (j = 0; j < vclips.numItems; j++) vclips[j].setSelected(true, j === vclips.numItems - 1);
+      if (!seq.performSceneEditDetectionOnSelection('CreateMarkers', false, a.sensitivity || 'LowSensitivity')) {
+        throw new Error('performSceneEditDetectionOnSelection selhalo.');
+      }
+      var mkr = item.getMarkers(), rc = [], mm = mkr.getFirstMarker();
+      while (mm) {
+        var s = mm.start.seconds;
+        for (i = 0; i < placed.length; i++) if (s >= placed[i][0] - 0.01 && s <= placed[i][1] + 0.01) { rc.push(r3(s)); break; }
+        mm = mkr.getNextMarker(mm);
+      }
+      var anal = 0;
+      for (i = 0; i < placed.length; i++) anal += placed[i][1] - placed[i][0];
+      return { sequence: seq.name, sequenceID: seq.sequenceID, ranges: placed, analyzed: r3(anal), cuts: rc, count: rc.length };
+    }
     if (a.to !== undefined && a.to > 0 && a.to < vt.end.seconds) {
       vt.end = timeObj(a.to);
       vt.outPoint = timeObj(a.to);

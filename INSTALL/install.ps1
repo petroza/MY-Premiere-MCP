@@ -5,12 +5,14 @@
 #   -CheckOnly    jen kontroly, nic nemeni (stejne jako Kontrola.cmd)
 #   -NoLocalLLM   preskoci gemma3 12B + vision model + llama.cpp (~9 GB) - AI strih pres Claude/GPT funguje dal
 #   -SkipModels   preskoci vsechny modely vcetne Whisperu (jen panel + MCP; prepis pak nepojede)
+#   -Hermes       stahne z internetu i Hermes (Qwen3.6-35B-A3B + llama.cpp, ~23 GB) - silnejsi lokalni strih
 #
 # Pozn.: kod i hlasky jsou zamerne bez diakritiky - konzole cmd.exe ji na ruznych strojich mrvi.
 param(
     [switch]$CheckOnly,
     [switch]$NoLocalLLM,
-    [switch]$SkipModels
+    [switch]$SkipModels,
+    [switch]$Hermes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -71,6 +73,8 @@ if ($missing.Count -gt 0) {
 $needGB = 15
 if ($NoLocalLLM) { $needGB = 5 }
 if ($SkipModels) { $needGB = 1 }
+# Hermes (~23 GB) je v baliku jen nekdy - pricitat ho jen kdyz se opravdu bude kopirovat
+if (-not $SkipModels -and -not $NoLocalLLM -and ($Hermes -or (Test-Path (Join-Path $offline 'models\hermes')))) { $needGB += 24 }
 try {
     $drive = (Get-Item $root).PSDrive
     $freeGB = [math]::Round($drive.Free / 1GB, 1)
@@ -218,13 +222,30 @@ if (-not $nodeDone) {
 Write-Host '  [2] CEP panel (propojeni do Adobe\CEP\extensions)'
 $ext = Join-Path $extRoot 'com.pz.premieremcp'
 New-Item -ItemType Directory -Force $extRoot | Out-Null
+# Instalace z docasne slozky (zkusebni kopie) nesmi prepojit panel zive instalace - po smazani
+# kopie by panel z Premiery zmizel (stalo se 2026-09-28).
+$tempRoot = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+$fromTemp = ([IO.Path]::GetFullPath($root) + '\').StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)
+$linkPanel = $true
 if (Test-Path $ext) {
     $item = Get-Item $ext -Force
-    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { cmd /c rmdir "$ext" | Out-Null }
+    if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+        $old = "$($item.Target)"
+        $same = $old -and ([IO.Path]::GetFullPath($old).TrimEnd('\') -ieq [IO.Path]::GetFullPath("$root\panel").TrimEnd('\'))
+        if ($fromTemp -and -not $same -and (Test-Path $old)) {
+            Write-Host "      ! instalace z TEMP - panel zustava propojeny na $old (zive instalace se nesaham)" -ForegroundColor Yellow
+            $linkPanel = $false
+        } else {
+            if (-not $same -and $old) { Write-Host "      ! panel byl propojeny na $old - prepojuji sem" -ForegroundColor Yellow }
+            cmd /c rmdir "$ext" | Out-Null
+        }
+    }
     else { throw "$ext existuje a neni to propojeni (junction) - smaz tu slozku rucne a spust instalaci znovu." }
 }
-cmd /c mklink /J "$ext" "$root\panel" | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "Nepodarilo se vytvorit propojeni $ext -> $root\panel." }
+if ($linkPanel) {
+    cmd /c mklink /J "$ext" "$root\panel" | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Nepodarilo se vytvorit propojeni $ext -> $root\panel." }
+}
 foreach ($v in 11..15) {
     $key = "HKCU:\Software\Adobe\CSXS.$v"
     if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
@@ -318,6 +339,27 @@ if (-not $SkipModels -and -not $NoLocalLLM) {
         Download "$hf/Qwen3VL-4B-Instruct-Q4_K_M.gguf" 'models\llm-vision\Qwen3VL-4B-Instruct-Q4_K_M.gguf'
         Download "$hf/mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf" 'models\llm-vision\mmproj-Qwen3VL-4B-Instruct-Q8_0.gguf'
     }
+    # Hermes (Qwen3.6-35B-A3B, ~22 GB) je volitelny silnejsi lokalni model pro plan_edit_local.
+    # Z offline baliku, kdyz tam je; z internetu jen na vyslovne prani (-Hermes) - je velky.
+    Write-Host '  [7b] Hermes (volitelne, silnejsi lokalni model)'
+    if (Test-Path 'models\hermes\Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf') { Info 'Hermes uz je na miste' }
+    elseif ($hasOffline -and (Test-Path (Join-Path $offline 'models\hermes'))) {
+        CopyFromOffline 'models\hermes' 'Hermes model' | Out-Null
+        CopyFromOffline 'tools\llama.cpp-hermes' 'llama.cpp pro Hermese' | Out-Null
+    } elseif ($Hermes) {
+        # llama.cpp b11118 = stejne sestaveni, se kterym je Hermes odladeny (scripts\hermes.ps1)
+        $hTag = 'b11118'
+        New-Item -ItemType Directory -Force tools\llama.cpp-hermes, models\hermes | Out-Null
+        $gh = "https://github.com/ggml-org/llama.cpp/releases/download/$hTag"
+        Download "$gh/llama-$hTag-bin-win-cuda-12.4-x64.zip" 'tools\llama-hermes.zip'
+        Download "$gh/cudart-llama-bin-win-cuda-12.4-x64.zip" 'tools\cudart-hermes.zip'
+        Expand-Archive tools\llama-hermes.zip -DestinationPath tools\llama.cpp-hermes -Force
+        Expand-Archive tools\cudart-hermes.zip -DestinationPath tools\llama.cpp-hermes -Force
+        Remove-Item tools\llama-hermes.zip, tools\cudart-hermes.zip -Force
+        $hf = 'https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main'
+        Download "$hf/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf" 'models\hermes\Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf'
+        Download "$hf/mmproj-F16.gguf" 'models\hermes\mmproj-Qwen3.6-35B-A3B-F16.gguf'
+    } else { Info 'Hermes se nestahuje (pridej -Hermes) - plan_edit_local pojede na gemma3' }
 } elseif (-not $SkipModels) {
     Warn 'Lokalni LLM preskocen (-NoLocalLLM)' 'Nastroje analyze_transcript / plan_edit_local / describe_frame nepobezi. Strih pres Claude/GPT funguje normalne.'
 }

@@ -153,6 +153,16 @@ def transcribe(params: dict, ctx) -> dict:
         "prompt": params.get("prompt") or None,
         "speakers": params.get("speakerTracks") or None,
     }
+    if opts["language"] is None:
+        opts["multilingual"] = True  # nový klíč cache: starší automatický přepis byl celý v jednom jazyce
+    # Přepis už existuje a agent nechce výslovně jiný model/jazyk/mikrofony -> vrať ho. Jinak by samotný jiný
+    # `prompt` (agent ho posílá "pro jistotu") spustil nový přepis celého videa (42 min ~ 5 min), přepnul index
+    # na přepis bez diarizace a změnil číslování vět – rozbil by hotové osnovy, plány i jména mluvčích.
+    explicit = (params.get("model") or params.get("speakerTracks")
+                or params.get("language", w["language"]) != w["language"])
+    existing = index_get("transcripts", src)
+    if existing and existing.exists() and not params.get("force") and not explicit:
+        return {"file": str(existing), "cached": True}
     out = cache_file("transcripts", src, opts)
     if out.exists() and not params.get("force"):
         index_set("transcripts", src, out)
@@ -162,16 +172,20 @@ def transcribe(params: dict, ctx) -> dict:
     ctx.progress(0.01, f"načítám Whisper {opts['model']}")
     model, device = gpu.whisper(opts["model"])
     ctx.progress(0.04, f"přepisuji ({device})")
-    segments, info = model.transcribe(
-        src,
-        language=opts["language"],
-        word_timestamps=True,
-        vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 400},
-        beam_size=w.get("beamSize", 5),
-        condition_on_previous_text=False,
-        initial_prompt=opts["prompt"],
-    )
+    # automatický jazyk = zjišťovat pro každý úsek zvlášť: jinak Whisper podle prvních 30 s určí jeden jazyk pro
+    # celý soubor a zbytek do něj "přeloží" (film EN+UK s ruským úvodem dal i anglického vypravěče rusky)
+    common = dict(language=opts["language"], word_timestamps=True, vad_filter=True,
+                  vad_parameters={"min_silence_duration_ms": 400}, beam_size=w.get("beamSize", 5),
+                  initial_prompt=opts["prompt"], multilingual=opts["language"] is None)
+    batch = int(w.get("batchSize", 8) or 0)
+    if device == "cuda" and batch > 1:
+        # dávkově: úseky řeči (VAD) jdou na GPU po několika najednou – změřeno na 10 min debaty 3,8× rychleji
+        # (68 s -> 18 s), přesnost textu i časů slov stejná (průměr 25 ms). Dávka 16 byla vedle Hermese pomalejší
+        # (nevejde se do VRAM). Věty se skládají ze slov (group_segments), dělení segmentů Whisperem nevadí.
+        from faster_whisper import BatchedInferencePipeline
+        segments, info = BatchedInferencePipeline(model).transcribe(src, batch_size=batch, **common)
+    else:
+        segments, info = model.transcribe(src, condition_on_previous_text=False, **common)
     duration = float(info.duration or 0.0)
     words: list[dict] = []
     for seg in segments:
@@ -197,6 +211,7 @@ def transcribe(params: dict, ctx) -> dict:
         "source": os.path.abspath(src),
         "duration": round(duration, 3),
         "language": getattr(info, "language", opts["language"]),
+        "multilingual": bool(opts.get("multilingual")),
         "model": opts["model"],
         "device": device,
         "speakers": speakers,

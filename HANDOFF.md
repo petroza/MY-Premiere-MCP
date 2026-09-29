@@ -1,8 +1,90 @@
 # HANDOFF – MY Premiere MCP (pro navazujícího Claude)
 
-> Stav k 2026-09-16 (dopoledne). Uživatel (Petr) píše česky, odpovídej česky, stručně. Pracuj v `O:\MYpremiereMCP`.
+> Uživatel (Petr) píše česky, odpovídej česky, stručně. Pracuj v `O:\MYpremiereMCP`.
 > Začni: přečti tenhle soubor, `README.md` a `CLAUDE.md`, pak `node scripts/smoke.mjs` a `worker_status`.
-> **Claude CLI je teď přihlášené** (`claude auth status` → loggedIn true, účet petr.zavorka@nova.cz, org TV Nova) – panel i `panel-run.mjs` fungují end-to-end, žádný obchvat přes přímou MCP session není potřeba.
+> **Claude CLI je teď přihlášené** (`claude auth status` → loggedIn true, firemní účet v organizaci) – panel i `panel-run.mjs` fungují end-to-end, žádný obchvat přes přímou MCP session není potřeba.
+
+> **Stav k 2026-09-23 (večer).** Nejnovější věci jsou v sekcích 0, 9, 10, 11. Starší sekce (5a–5v) jsou historie předchozích session.
+
+## 0. ZAČNI TADY – aktuální stav a rozdělaná práce (2026-09-23)
+
+### Co se právě dělalo
+Uživatel chtěl: (a) připojit svůj **lokální Hermes** (agent na `O:\Hermes`, llama-server na portu 8000,
+model Qwen3.6-35B-A3B) jako další "mozek" pro střih, (b) porovnat kvalitu střihu **Claude vs Hermes**,
+(c) porovnat **všechny modely** v panelu, (d) **vyladit Hermese**, (e) rozpoznávat mluvčí **podle barvy hlasu**.
+Body a–c jsou hotové a změřené (sekce 9 a 10). Body d+e jsou naimplementované, ale **chybí je doměřit**.
+
+### Stav po nočním ladění 2026-09-24 ráno – podrobnosti v sekci 12
+- Plán lokálním modelem: debata 229 s → ~40–70 s, bez vad (moderátor, useknuté i nedokončené věty, odbočky = 0),
+  délka ±3 %, vyvážení mluvčích i témat, deterministické (teplota 0). Osnova 5,5 → 2,1 min, přepis 4× rychlejší
+  (dávkově), celá cesta u nového 42min videa ~5 min.
+- Claude v panelu: `--tools=ToolSearch --effort medium` + `panel/agent-system.md` + hybrid (`plan_edit_local
+  format:"review"`) → typický střih $0,85 / 132 s → **$0,16 / 69 s**, stejná kvalita.
+- Opravené chyby: hodnocení jen K1–K16, přepis znovu při jiném `prompt` (měnil číslování), filtr moderátora,
+  kolize zvuků v multicam, `detect_scene_cuts` přes celý zdroj (teď `ranges`, 7,8 s).
+- Testy: `test-hermes-loop`, `test-plan-diskuse`, `test-plan-battery`, `test-fresh-pipeline`, `compare-agents`.
+- Ráno doplněno: `sceneCuts: true` u stavby (hranice → skryté střihy obrazu, jen v tichu; upoutávka přes panel
+  75 s / $0,20), `continuity` varování při utnutém souvětí, lokální stavba nově dolaďuje konce vět podle zvuku,
+  instrukce MCP serveru přepsány na úsporný postup, „SCENE DETECT“ se znovu používá, `local-edit` rozumí
+  „třicetisekundová“. Úzké zadání přes panel 21 s / $0,08.
+- Otevřené: knihovna hlasů na jiné nahrávce stejných lidí (chybí materiál); v testovacím projektu testicek2 je
+  hodně testovacích sekvencí + „SCENE DETECT …“ (smazat ručně); `test/fresh/debata-nova.mp4` (640 MB) lze smazat.
+
+### Aktualizace 2026-09-23 ~21:15 – body 1–3 níže HOTOVÉ (výsledky v sekci 11, "Doměřeno")
+Zbývá jen bod 4 (gemma3) a ověřit knihovnu hlasů na **jiné nahrávce stejných lidí** (zatím chybí materiál).
+
+### Rozdělaná práce (původní seznam)
+1. **5 kol testu Hermese po ladění** – `node scripts/test-hermes-loop.mjs 5`.
+   Poslední běh spadl (všech 5 kol) na `URLError 10061`, protože `scripts/restart-worker.ps1` tehdy zabíjel
+   i uživatelův Hermes (matchoval jakýkoli `llama-server`). **Opraveno** – skript porovnává celou cestu a sahá
+   jen na náš `tools\llama.cpp\llama-server.exe`. Před testem ověř Hermes:
+   `curl -s -m 30 http://127.0.0.1:8000/health` (když neběží: `powershell -File O:\Hermes\switch-llm.ps1 vize`, náběh ~2 min).
+2. **Porovnej s hodnotami PŘED laděním** (Hermes, stejné zadání, cíl 180 s):
+   délka 185 s · 19 vět · **1 věta moderátora** · **2 useknuté začátky** · 3 odbočky mimo téma · parkování 4 / bydlení 7.
+   Po ladění by moderátor i useknuté věty měly být 0 (řeší se deterministicky, viz sekce 11).
+3. **Dokonči test knihovny hlasů** – `node scripts/test-voices.mjs`. Krok 0 už prokazatelně funguje:
+   diarizace debaty dala S1 20:34 / S2 14:57 / S3 05:09, což odpovídá Ferancová / Vašíř / moderátor.
+4. Volitelně: doměřit **náš gemma3 (backend "local")** na stejném úkolu – zatím nešlo, protože Hermes drží
+   ~11 GB VRAM; `ensure_llm` má fallback na méně vrstev na GPU (`llm.gpuLayersFallback`), ale bude to pomalé.
+
+### Co musí běžet
+| Co | Jak ověřit / spustit |
+|---|---|
+| Premiere + panel (most :7880) | `node scripts/test-premiere.mjs status`; panel = Okno > Rozšíření > MY Premiere MCP |
+| Worker (:7881) | `curl -s http://127.0.0.1:7881/health` – musí odpovědět **do ~1 s**, jinak ho MCP server považuje za mrtvý |
+| Hermes (:8000, pro backend "hermes") | `curl -s -m 30 http://127.0.0.1:8000/health`, start `O:\Hermes\switch-llm.ps1 vize` |
+| Claude CLI | přihlášené (`claude auth status`) |
+| Codex CLI | **není v PATH**, leží v `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe` (panel i `compare-agents.mjs` to najdou samy) |
+
+### Testovací materiál a sekvence
+- Hlavní materiál: `C:\Users\Petr\Downloads\01-video\tncz-TIT_2026-06-16_naprimo_liberec.mp4.mp4`
+  (předvolební debata Olomouc, 41:57, 362 vět; přepis, diarizace i osnovy jsou v cache).
+  **Pozor:** soubor se v průběhu prací přesunul z `C:\Users\Petr\Downloads\` do podsložky `01-video`;
+  klíče v cache byly přemapované, ale položka v projektu Premiere má pořád starou cestu.
+- Projekt Premiere: `O:\DETAIL\premiere\testicek2.prproj`; sekvence `STRIH CLAUDE…`, `STRIH HERMES…`,
+  `STRIH CLAUDE-HAIKU/SONNET/OPUS`, `STRIH CODEX-GPT-…` (výsledky srovnání, dají se přehrát a porovnat očima).
+- Druhý materiál: `test/podcast/Diskuse1.mp4` (CC BY-NC-ND, 26:39) – slouží i jako kontrola, že se cizí hlasy
+  nepřiřadí k uloženým jménům v knihovně hlasů.
+
+### Skripty, které k tomu patří
+| Skript | K čemu |
+|---|---|
+| `scripts/test-hermes-loop.mjs [kol]` | N kol stejného zadání Hermesem, měří kvalitu i **stabilitu** výběru |
+| `scripts/compare-agents.mjs "claude:sonnet,codex:gpt-5.5,hermes:local"` | srovnání modelů, každý staví vlastní sekvenci |
+| `scripts/eval-sequences.mjs "NÁZEV SEKVENCE" …` | obsahové vyhodnocení hotové sekvence (vady, pokrytí témat) |
+| `scripts/compare-llm.mjs [backendy] [cesta] [cíl]` | srovnání jen LLM backendů (osnova + plán), zadání přes env `INSTRUCTION` |
+| `scripts/local-edit.mjs [backend]` | to, co spouští panel ve volbě "Hermes (lokálně, zdarma)" |
+| `scripts/test-voices.mjs` | knihovna hlasů: diarizace → pojmenování → automatické rozpoznání |
+| `scripts/restart-worker.ps1` | tvrdý restart Workeru (nesahá na cizí llama-server) |
+
+### Pasti, na které jsem dnes naletěl (nedělej znovu)
+- **Dva Workery na jednom portu** (Windows SO_REUSEADDR) – opraveno; kdyby se to vrátilo, projeví se to tak,
+  že změny ve `worker/*.py` "nic nedělají". Ověření: po restartu se musí změnit `pid` v `/health`.
+- **Pomalé `/health`** (4 s kvůli dotazům na LLM backendy) shazovalo start Workeru – stav se teď cachuje 15 s
+  a dotaz má 0,4 s limit.
+- **`restart-worker.ps1` zabíjel Hermes** – opraveno (porovnává celou cestu k exe).
+- U dlouhých sekvencí volej `get_sequence` s `clips: false`, jinak to zahltí kontext.
+- Výstup skriptů spuštěných přes `| tail` se objeví až po doběhnutí – nediv se, že "nic nepíše".
 
 ## 1. Cíl uživatele
 1. **Střih v Adobe Premiere Pro přes Claude nebo Codex (GPT) podle promptu**, i u **hodinového videa**, s porozuměním **českému dialogu** (co kdo říká, aby střih dával smysl).
@@ -405,3 +487,665 @@ node scripts\test-podcast2.mjs                # skutečné video end-to-end (lok
 powershell -File scripts\restart-worker.ps1   # tvrdý restart Workeru
 node scripts\cdp.mjs                          # chyby panelu přes DevTools
 ```
+
+## 9. Hermes jako druhý jazykový model (2026-09-23)
+
+Uživatel má na `O:\Hermes` vlastního agenta s llama-serverem (port 8000, **Qwen3.6-35B-A3B Q4_K_XL**, ovládá se
+`O:\Hermes\switch-llm.ps1 vize|text|stop|status`). Je připojený jako **externí backend** vedle našeho gemma3:
+
+- `config.json` → `llmBackends.hermes` (url, model `dflash`, `thinking: false`, temperature).
+- `worker/gpu.py`: `chat_json(..., backend)` – externí server se nespouští ani nevypíná, **nesahá na naši GPU správu**;
+  `backend_status()` (vidět ve `worker_status`), `kill_orphan_llama` kontroluje jen exe z našeho `tools/` (Hermes nechá být).
+- `analyze_transcript` a `plan_edit_local` mají parametr `backend` ("local" | "hermes"); analýza má backend v cache klíči,
+  `plan_edit` si vždy vytáhne osnovu **od stejného modelu**.
+- Uvažovací modely: bez `enable_thinking:false` spotřebují limit tokenů na přemýšlení a vrátí prázdný `content`
+  (fallback čte `reasoning_content`). Se schématem (json_schema) Hermes odpovídá spolehlivě.
+- Vedle Hermese (10–11 GB VRAM) se náš gemma3 nevejde → `ensure_llm` má fallback na `llm.gpuLayersFallback` (12 vrstev).
+
+### Test Claude vs Hermes (stejné zadání, stejný materiál)
+Materiál: `tncz-TIT_2026-06-16_naprimo_liberec.mp4` (předvolební debata Olomouc, 41:57, 362 vět).
+Zadání: *„Tříminutový sestřih o bydlení a parkování: nejkonkrétnější argumenty obou hostů, bez organizačních vět moderátora, bez opakování."* (cíl 180 s)
+
+| | Claude (osnova + 3 pasáže přepisu) | Hermes (osnova + plán lokálně) |
+|---|---|---|
+| Výsledek | 20 vět, 184 s | 24 vět, 189 s |
+| Čas | ~5 min (z toho ~12k tokenů kreditů) | 5,5 min osnova + 1 min plán, 0 kreditů |
+| Věty moderátora | 0 | 1 (#40) |
+| Useknuté začátky vět | 1 (#293) | 3 (#56, #92, #109) |
+| Vata < 3 s | 1 | 3 (např. #41 „Asi jak v jakém ohledu.") |
+| Pokrytí parkování / bydlení | 6 / 9 vět | 4 / 7 vět |
+| Mimo téma | 0 | 2 (#30 sloup UNESCO, #48 chodník) |
+
+Průnik výběrů byl jen **4 věty z 20/24** – modely čtou materiál velmi odlišně.
+Hermes našel 4 konkrétní kroky primátorky, které Claude vynechal (#82/83 koordinátor stavebních řízení,
+#85 změna územního plánu, #90 kontaktní místo pro bydlení, #92 garance nájemného); Claude zase pokryl
+**řešení parkování** (P+R, zóny, karta zdarma, nepoužité automaty, důvod zastavení politiky), které Hermes celé vynechal.
+
+**Závěr:** Hermes je použitelný jako **levný první průchod a druhý názor**, ne jako finální střih.
+Doporučený režim: `plan_edit_local backend:"hermes"` → Claude výsledek dočistí (vata, useknuté věty, chybějící téma).
+Sekvence k porovnání v `O:\DETAIL\premiere\testicek2.prproj`: „STRIH CLAUDE bydleni+parkovani", „STRIH HERMES bydleni+parkovani".
+Report: `test/llm-compare/report.md`, skripty `scripts/compare-llm.mjs` (env `INSTRUCTION`), `scripts/build-from-compare.mjs`.
+
+**Neověřeno:** přímé srovnání Hermes vs náš gemma3 na stejném materiálu (Hermes drží VRAM, gemma3 by běžel s offloadem a výrazně pomaleji).
+
+## 10. Srovnání všech modelů na stejném střihu (2026-09-23)
+
+Materiál: `tncz-TIT_2026-06-16_naprimo_liberec.mp4` (42 min, 362 vět, předvolební debata Olomouc).
+Zadání pro všechny stejné: *„Tříminutový sestřih o bydlení a parkování: nejkonkrétnější argumenty obou hostů
+(co chtějí udělat a čím to zdůvodňují), bez úvodních a organizačních vět moderátora, bez opakování."* (cíl 180 s)
+Každý model dostal identický prompt přes stejné CLI jako panel a sám postavil sekvenci
+(`scripts/compare-agents.mjs`, vyhodnocení `scripts/eval-sequences.mjs`, report `test/agent-compare/report.md`).
+
+| Model | Čas | Cena | Délka | Vět | Moderátor | Useknuté | Parkování/Bydlení |
+|---|---|---|---|---|---|---|---|
+| Claude Haiku 4.5 | 145 s | $0,202 | **339 s ✖** | 40 | 0 | 0 | 9 / 12 |
+| Claude Sonnet | 219 s | $0,976 | 174 s | 19 | 0 | 0 | 9 / **2** |
+| Claude Opus | 211 s | $1,438 | 176 s | 19 | 0 | 1 | 9 / 4 |
+| Codex GPT-6-Astra | 117 s | – (předplatné) | 180 s | 22 | **2 ✖** | 0 | 9 / 3 |
+| Codex GPT-5.5 | 116 s | – (předplatné) | 176 s | 22 | 0 | 0 | 9 / 7 |
+| Hermes Qwen3.6-35B (lokálně) | 53 s | zdarma | 185 s | 19 | 1 ✖ | 2 | 4 / 7 |
+| Claude v konverzaci (ruční výběr přes nástroje) | ~5 min | kredity session | 184 s | 20 | 0 | 2 | 6 / 9 |
+
+Pozn.: sloupec Parkování/Bydlení je klíčkový (počítá výskyt slov), takže "mimo téma" nadhodnocuje –
+věty typu #82/#83 (koordinátor stavebních řízení) jsou věcně o bydlení, jen bez klíčového slova.
+Skutečné odbočky mimo zadání: Hermes #30/#33/#38 (sloup UNESCO, sakrální stavby, "Olomouc rozkvetla"),
+Haiku #20/#21 (výstava na Horním náměstí), GPT-6-Astra #78 (věta moderátora).
+
+**Závěry:**
+- **GPT-5.5 (Codex)** dal nejvyváženější výsledek: přesná délka, obě témata, žádná vada, 2× rychlejší než Sonnet.
+- **Opus/Sonnet** spolehlivě drží délku a neberou moderátora, ale Sonnet se vychýlil skoro jen k parkování (bydlení 2 věty).
+  Opus je nejdražší ($1,44 za jeden tříminutový sestřih).
+- **Haiku** cílovou délku ignorovalo (339 s místo 180) – levné a rychlé, ale u zadané stopáže nespolehlivé.
+- **Hermes** je zdarma a nejrychlejší (53 s), ale má nejvíc vad (1 věta moderátora, 2 useknuté začátky, 3 odbočky).
+- Celkově: **délku dodrží všichni kromě Haiku**; rozdíl je hlavně v tom, jestli model pokryje obě zadaná témata
+  a jestli nepustí do střihu vatu/moderátora.
+
+**Opraveno při testu:** `scripts/local-edit.mjs` (režim "Hermes (lokálně, zdarma)" v panelu) rozpoznával cílovou délku
+jen z číslic – "tříminutový" ignoroval a výsledek vyšel na 6:35. Doplněny české číslovky (`půlminutový`…`dvacetiminutový`).
+Codex CLI není v PATH (leží v `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`) – panel na to fallback měl,
+doplněn i do `scripts/compare-agents.mjs`.
+
+**Změna po srovnání (2026-09-23, přání uživatele):** Haiku 4.5 **odstraněno z nabídky modelů v panelu**
+(`panel/index.html`) – v testu na skutečném střihu jako jediné ignorovalo zadanou stopáž (339 s místo 180).
+Výchozím modelem pro Claude je nově **Sonnet** (`lastModelByAgent.claude`), uložená volba `haiku`
+v `localStorage` se ignoruje. Tím je překonaná starší poznámka z [5v] o Haiku jako výchozím modelu.
+Ověřeno v běžícím panelu: nabídka = výchozí model / Opus / Sonnet, vybráno Sonnet.
+
+## 11. Ladění Hermese + knihovna hlasů (2026-09-23)
+
+**Chyba, která dlouho mátla: dva Workery na jednom portu.** `ThreadingHTTPServer` má `allow_reuse_address = True`,
+což na Windows (SO_REUSEADDR) dovolí navázat na **stejný port dvě instance**. Po restartu kvůli změně kódu tak
+zůstal běžet starý Worker vedle nového, dotazy chodily náhodně jednomu z nich → změny v `worker/*.py` se
+"neprojevovaly" a občas padalo `Worker se nespustil do 90 s`. Opraveno v `worker/server.py` (`ExclusiveHTTPServer`
+s `allow_reuse_address = False` + `SO_EXCLUSIVEADDRUSE`), takže druhá instance rovnou skončí a restart je čistý.
+V `server/index.js` navíc zámek `cache/worker.restart.lock` (restartuje jen jeden proces; paralelní skripty se
+o Worker neperou) a fallback: když Worker nakonec odpovídá, použije se místo tvrdé chyby.
+
+**Ladění kvality střihu (platí pro všechny modely, ne jen Hermese)** – `worker/analysis.py`:
+- Zadání obsahuje "bez moderátora/otázek/organizačních vět" → jeho věty se ze střihu **vyhodí deterministicky**
+  (`_moderator_speakers`: jméno z knihovny hlasů, jinak ten, kdo mluví nejmíň a nejčastěji se ptá).
+  Q/A párování pak moderátorovy otázky zpět nepřidává.
+- Věta začínající malým písmenem (pokračování předchozí) se buď **doplní o předchozí větu, nebo vypadne** –
+  střih už nezačíná uprostřed souvětí. Vrací se v `fixedFragments` / `removedModerator`.
+- Do promptu pro výběr vět přidána obě pravidla explicitně.
+- `scripts/local-edit.mjs` (panel → "Hermes (lokálně, zdarma)") rozumí i slovní stopáži ("tříminutový").
+
+**Knihovna hlasů (`models/voices/library.json`)** – uživatelův nápad "poznat lidi podle barvy hlasu":
+- Diarizace (metoda chunks) spočítá pro každého mluvčího **průměrný hlasový otisk** (CAM++ embedding) → `centroids`
+  v cache souboru diarizace.
+- Otisky se porovnají s knihovnou (kosinová podobnost ≥ `diarization.voiceMatch`, výchozí 0.55) → mluvčí dostane
+  rovnou jméno (`matchedVoices`), jinak zůstane S1/S2/…
+- `rename_speakers` s `enroll: true` (výchozí) hlas **uloží/zprůměruje** → v dalších videích se pozná sám.
+  Nové nástroje: `list_voices`, `forget_voice`.
+- Test: `scripts/test-voices.mjs` (diarizace → pojmenování → nová diarizace pozná jména → kontrola, že cizí
+  hlasy z jiného videa se k uloženým jménům nepřiřadí).
+
+### Doměřeno (2026-09-23 večer)
+**1. běh 5 kol po ladění odhalil dvě chyby v `worker/analysis.py plan_edit`** (moderátor 1× a useknutá věta 1× v každém kole):
+- Regex pro "bez moderátora" byl `bez\s+\w*\s*(moder|…)` – na zadání "bez **úvodních a organizačních** vět moderátora"
+  (dvě slova mezi) nezabral, filtr se vůbec nezapnul a Q/A párování navíc vrátilo otázku moderátora #40.
+  Opraveno na `\bbez\b[^.;:(),]{0,60}?(moder|otázek|organiza)` (v rámci jedné fráze; "bez opakování, jen moderátor" nezabere).
+- Oprava fragmentů doplnila #92 k #93, ale zkracování na cílovou délku je bralo jako **samostatné celky** a #92 vyhodilo
+  → #93 zase bez začátku. Teď se věta začínající malým písmenem spojí s předchozí do jednoho celku (`continues()`),
+  stejně jako dvojice otázka–odpověď.
+
+**Hermes, 5 kol, stejné zadání, cíl 180 s:**
+| | před laděním | po ladění, před opravou | **po opravě** |
+|---|---|---|---|
+| délka | 185 s | 178,7 s (173–183) | **178,2 s (171–186)** |
+| vět | 19 | 18,2 | 18,4 |
+| moderátor | 1 | 5×/5 kol | **0** |
+| useknuté začátky | 2 | 5×/5 kol | **0** |
+| odbočky mimo téma | 3 (#30, #33, #38) | – | #33 2×, #48 2×, #38 1× (z 5 kol); #30 už nikdy |
+| čas | 53 s | 41,7 s | 40,8 s |
+Stabilita: 13 vět ve všech 5 kolech, celkem 24 různých vět.
+
+**Knihovna hlasů – `node scripts/test-voices.mjs` → vše prošlo** (diarizace 3 otisky, uložení Ferancová/Vašíř/
+Moderátor Napřímo, nová diarizace je pojmenuje sama, Diskuse1 nic nepřiřadí). Kosinové podobnosti: cizí hlasy
+z Diskuse1 max **0,30** vůči prahu 0,55 (velká rezerva); mezi třemi lidmi v debatě max 0,33.
+**Pozor:** shoda na stejném videu vychází 1,0, protože diarizace je deterministická – je to triviální případ.
+**Neověřeno:** rozpoznání stejného člověka v **jiné nahrávce** (jiný mikrofon/studio) – potřebuje to další díl
+Napřímo nebo jiné video s Ferancovou/Vašířem. Knihovna teď obsahuje tyto 3 hlasy a přepis debaty má místo S1–S3 jména.
+
+## 12. Noční ladění 2026-09-23/24 – přesnost, rychlost, tokeny (rozpracováno, průběžně doplňováno)
+
+**Plán střihu (`worker/analysis.py plan_edit`) – nalezené a opravené chyby:**
+- **Hodnocení kapitol mělo limit 900 tokenů** → u 50 kapitol model ohodnotil jen K1–K16, zbytek dostal 0
+  a celá druhá půlka pořadu (u debaty celé parkování, věty 272–338) se do výběru nikdy nedostala. Teď po dávkách po 12.
+- Kapitoly se hodnotily k zadání, ale věty uvnitř ne → do střihu padaly odbočky (sloup UNESCO, výstava).
+  Model teď u každé vybrané věty uvádí téma zadání / okrajově; okrajové jdou při zkracování pryč první.
+- **Kontrola tématu** (`_verify_topic`): samostatné volání, u každé věty nejdřív „o čem je“ (o_cem), pak přiřazení
+  k tématu zadání / „jiné“, s názvem kapitoly jako kontextem. Chytá příbuzná témata (tramvaje ≠ parkování),
+  bez příkladů šitých na debatu. Hesla jednoho tématu se při kontrole nerozlišují (jinak moc přísné).
+- **Témata zadání** (`_instruction_topics`): model vypíše témata + zda jde o samostatná témata vedle sebe
+  („o bydlení a parkování“ → vyvažuje se podíl) nebo aspekty jednoho („cena ovladače“ → nevyvažuje se).
+- **Vyvážení mluvčích** („argumenty obou hostů“): zkracování bere nejdřív nadměrně zastoupeného (> férový podíl + 5 b.).
+- Délka: zkracování cílí na ±3 % (dřív začínalo až nad +10 %), krátký výběr se dorovná z vyřazených;
+  když ani to nestačí, **doplňkový výběr** z dosud nevybraných vět jádrových kapitol.
+- Zrychlení: hodnocení bez zdůvodnění (generování je dno – Hermes ~38 tok/s, prompt ~520 tok/s, cache prefixu
+  u Qwen3.6 nefunguje), okna 20 vět, moderátor se do promptu vůbec nedává, kontrola tématu až po předběžném
+  zkrácení na 1,6× cíle. `plan_edit` vrací `elapsedSec` a `llmStats` (volání/tokeny/čas po fázích) – `gpu.CALL_STATS`.
+- `backend` výchozí `auto` = Hermes, když běží, jinak vlastní gemma3.
+- Testy: `scripts/test-hermes-loop.mjs` (debata, měří i odbočky a podíl Ferancové), **nový**
+  `scripts/test-plan-diskuse.mjs` (jiný materiál i zadání – pojistka proti přeladění). Moderátor se v testech
+  pozná podle mluvčího – starý pevný seznam ID byl ze staré verze přepisu a obsahoval i věty hostů.
+
+**Claude – tokeny (změřeno `claude -p` s prázdným dotazem):** dnešní panel = **27 800 tokenů** zápisu do cache
+při každém spuštění (1h cache = 2× cena vstupu). Z toho popisy 43 MCP nástrojů ~15 700, výchozí systémový prompt
+Claude Code ~6 700, vestavěné nástroje ~2 600, CLAUDE.md ~2 600. `--bare` nejde (vyžaduje API klíč, ne OAuth).
+Štíhlá varianta = `--tools=` + `--system-prompt <panel/agent-system.md>` → ~18 500. Výsledky nástrojů se teď vrací
+jako kompaktní JSON (dřív odsazený mezerami → zbytečné tokeny v každém výsledku).
+`plan_edit_local` má `format:"review"` = texty vybraných vět + ověření náhradníci (hybrid: Hermes navrhne,
+Claude jen zkontroluje). `scripts/compare-agents.mjs` umí profil `claude:sonnet:lean` a ukládá průběh do `<TAG>.jsonl`.
+
+**Opraveno:** `gpu.whisper()` po záloze na CPU načítal model znovu při každém přepisu (jiný klíč než požadovaný).
+
+**Průběžné výsledky (2026-09-24 ~01:30):**
+- Plán Hermesem (debata, 42 min, cíl 180 s): **229 s → 59 s**, 6/6 kol bez vady (moderátor 0, useknuté 0, odbočky 0),
+  délka 175–184 s, témata bydlení/parkování ~55/45, Ferancová 38–49 %. `Diskuse1` (cíl 120 s): 20–27 s, 113–123 s,
+  100 % v jádru tématu. Zrychlení: skóre kapitol jako pole čísel (28 → 7 s), výběr vět jako tři pole ID
+  `{"nutne","dobre","okrajove"}` místo objektů (84 → 38 s), kontrola tématu bez popisu `o_cem` (33 → 12 s,
+  stejný verdikt 5/5), kompaktní JSON na jednom řádku ve všech voláních (`gpu.chat_json` přidává pokyn).
+- **Osnova (analyze) 3,8× méně tokenů**: důvody slabých vět jen kódem (enum), shrnutí max 20 slov, JSON na jednom
+  řádku → debata 5,5 min → 2,1 min, Diskuse1 159 → 58 s. `analyze` i `plan_edit` mají výchozí backend `auto`.
+- Kontrola tématu: věty bez verdiktu se ptají znovu (dřív prošly bez kontroly); pojistka „model vyřadil všechno“
+  až od 90 % (při 60 % zahazovala správný verdikt, když kandidáti z příbuzné kapitoly – tramvaj – tvořili většinu).
+- **Claude hybrid naostro** (`compare-agents.mjs claude:sonnet,claude:sonnet:lean`): dnešní panel $0,851 / 105k tokenů
+  zápisu / 10 kroků vs. **štíhlý+hybrid $0,222 / 25k / 5 kroků**, oba bez vad, hybrid lépe vyvážený (Ferancová 47 %
+  vs 35 %). Nasazeno do panelu (`panel/main.js`: `--tools=` + `--system-prompt` z `panel/agent-system.md`, jen
+  u claude.exe – .cmd by cmd.exe rozbil víceřádkový argument). Ověřeno přes `panel-run.mjs`.
+- Úspory tokenů na serveru: `transcribe_media` u dlouhého přepisu (> 8000 znaků) vrací jen začátek + odkaz
+  na cílené čtení (dřív 20 000 znaků, které agent v každém dalším kroku četl znovu); `search_transcript` při
+  nenalezení zkusí kmen slova (skloňování); zapomenutý `path`/`source` = poslední zdroj v běhu; chyba s chybějícím
+  zdrojem vypíše jen 5 nejnovějších přepisů. Nový `scripts/panel-reload.mjs` (reload stránky panelu přes DevTools).
+- **Whisper vedle Hermese** (`scripts/asr-bench.py`, 3 min zvuku): při plné VRAM (11,4 GB) float16 87 s (ovladač
+  přelévá do RAM), při 4 GB volných 22 s, int8_float16 28,5 s se stejnou přesností, CPU int8 255 s (pomaleji než
+  realtime – CPU cesta nemá smysl ani na 7950X3D). `gpu.whisper()` teď po uvolnění vlastních modelů změří volnou
+  VRAM (`free_vram_mb`) a pod 4,5 GB použije int8_float16.
+
+**Další výsledky (2026-09-24 ~02:30):**
+- **Teplota Hermese 0** (`config.json llmBackends.hermes.temperature`): stejné zadání = stejný střih (dřív se výběr
+  mezi koly lišil – ve všech 5 kolech byly jen 3 stejné věty). Kvalitu to nezhoršilo.
+- Zkracování: mezi rovnocennými celky jdou pryč **nejkratší** (dřív nejdelší → střih měl 36 vytržených krátkých
+  vět místo ~18 souvislých). "Za druhé…/Za třetí…/Tím…" se berou jako pokračování předchozí věty (jako malé písmeno).
+  **Vyvažování výměnou** (`rebalance`): celek převažujícího mluvčího/tématu se nahradí celky z ověřených náhradníků,
+  když by samotné vyhození stopáž podstřelilo; při nouzi se ověří i nejlepší z předběžně vyřazených.
+- Témata zadání: `_instruction_topics` vrací i `obecne` (přehled celého pořadu → bez kontroly tématu, zkracování
+  hlídá pokrytí různých kapitol) – ale obrat „o …/ohledně/na téma“ obecnost vždy ruší (model jednou dal obecné
+  u „sestřih o seniorském bydlení“). Samostatná témata i deterministicky: dvě témata spojená přímo spojkou
+  („o bydlení a parkování“). Vyvážení mluvčích pozná i „každý z kandidátů“.
+- Filtr moderátora pozná i „vynech/žádné/nevybírej … moderátora“ (Claude zadání přeformuloval „Vynech…“ a filtr
+  se nezapnul). Prompt pro Clauda i `AGENTS.md`: `instruction` předávat doslova, `backend` vynechat.
+  Popis parametru `backend` už "local" nenabízí jako rovnocenné – **Codex si vyžádal "local" (gemma3 vedle Hermese)
+  a plán trval přes 10 min**; úlohu šlo zrušit `POST :7881/jobs/<id>/cancel` s hlavičkou `X-PMCP-Token`.
+- **Chyba přepisu nalezena a opravena (`worker/asr.py`)**: `transcribe_media` s jiným `prompt` (agent ho posílá „pro
+  jistotu“) spustil nový přepis celého videa, přepnul index na přepis bez diarizace a změnil číslování vět
+  (v cache debaty bylo 8 přepisů!). Teď se existující přepis vrátí, pokud agent výslovně nechce jiný model/jazyk/
+  mikrofony. Správný přepis debaty = `…01a7cbdfa357.json` (365 vět, diarizace, jména). Testy mají čísla podle něj
+  (tramvaj 243–271).
+- `compare-agents.mjs` hledá novou sekvenci podle ID (opakovaný běh se stejným názvem dřív měřil starou sekvenci).
+- Nový `scripts/test-plan-battery.mjs` – 6 různých zadání na 2 materiálech, texty do `test/hermes-loop/battery.md`.
+  Všech 6 v toleranci ±3 %, čas 21–67 s. Slabina: věty s odkazem na předchozí kontext („Teď se nám podařilo…“) – to
+  dočistí Claude při kontrole návrhu.
+- **Whisper dávkově** (`BatchedInferencePipeline`, `config.whisper.batchSize` 8, jen na GPU): 10 min debaty 68 s → 18 s,
+  přesnost textu i časů slov stejná (`scripts/asr-batch-bench.py`); přes Worker 10 min za 23 s. `test-worker.mjs` prošel.
+- Codex GPT-5.5 se stejným zadáním: bez vad, 178 s, ale sám přečetl velkou část přepisu (na předplatném to nevadí).
+- Lokální cesta z panelu (`local-edit.mjs`): 45 s včetně stavby sekvence; místo seznamu skóre vypisuje souhrn
+  (témata, vynechaný moderátor, vyřazeno mimo téma).
+
+**Claude v panelu – finální nastavení (2026-09-24 ~02:50, `panel/main.js`):**
+`--tools=ToolSearch --effort medium --system-prompt <panel/agent-system.md>` (+ `--mcp-config … --strict-mcp-config
+--allowedTools mcp__premiere`). Změřeno `compare-agents.mjs` na stejném 3min střihu debaty:
+| profil | čas | cena | výstup tok. | střih |
+|---|---|---|---|---|
+| původní panel | 132 s | $0,851 | 10 675 | bez vad, Ferancová 35 % |
+| `--tools=` + prompt (lean) | 106–125 s | $0,13–0,25 | 2 900–4 200 | bez vad |
+| + ToolSearch, výchozí úsilí (lean2) | 124 s | $0,278 | 7 636 | bez vad |
+| **+ ToolSearch + effort medium** | **70 s** | **$0,160** | 1 986 | bez vad, 54 % |
+| + ToolSearch + effort low | 66 s | $0,144 | 1 233 | bez vad (stejný výsledek) |
+- ToolSearch: prázdný dotaz 19 665 → **5 550 tokenů** (popisy 43 MCP nástrojů se načtou až na vyžádání). Prompt
+  Claudovi říká přesný dotaz `select:mcp__premiere__…` (bez předpony hledal 3×). ENABLE_TOOL_SEARCH nic nedělá,
+  rozhoduje povolení vestavěného nástroje ToolSearch.
+- Výchozí úsilí generovalo hodně přemýšlení (výstupní tokeny jsou nejdražší) bez rozdílu ve výsledku → medium.
+- Panel naostro (`panel-run.mjs`): sestřih o seniorech 57 s / $0,108; navazující úprava 53 s / $0,039;
+  titulky 8 s / $0,028.
+- Nedokončené konce: plán k vybrané větě doplní i její pokračování (další věta téhož mluvčího začínající malým
+  písmenem); review výstup značí pokračování `↳` a Claude je nesmí oddělit (dřív vybral #125 „…pro seniory,“ bez #126).
+  Testy (`test-plan-battery`, `compare-agents`) měří i „nedokončené“.
+- gemma3 (backend local) vedle Hermese: `ensure_llm` podle volné VRAM rovnou volí 12 vrstev na GPU (dřív -ngl 99 →
+  ovladač vytlačil Hermese z VRAM do RAM, 11 GB → 2 GB). Plán Diskuse1 přes gemma3: 177 s, 86 % v jádru – použitelná záloha.
+- **Multicam přes panel** (syntetický `test/multicam`): 16–23 s, $0,06–0,14, střihy i sync správně (chyba 0,02 s).
+  Nalezeno: Claude jednou předal do `audio` oba mikrofony na **stejnou stopu A1** → druhý přepsal první, pod obrazem
+  zbyl jen moderátor. Opraveno v `build_multicam_sequence`: kolidující zvuky se rozloží na volné stopy (A1, A2…)
+  s upozorněním ve `warnings`; popis `audio` + prompt: mikrofony patří do `speakerTracks`, ne na timeline.
+  Chybné rozhodnutí se opakovalo, dokud byl v panelu zapnutý „navázat“ (Claude pokračoval v relaci, kde to udělal);
+  v čisté relaci dal správně jen `master_mix.wav`.
+- Pozn.: testy vytvořily v `O:\DETAIL\premiere\testicek2.prproj` řadu sekvencí `TEST PANEL …`, `TEST CLI …`,
+  `TEST MCP …`, `STRIH CLAUDE-…`, `STRIH HERMES …` (dají se smazat ručně).
+- **Celá cesta u nového videa** (`scripts/test-fresh-pipeline.mjs`, kopie debaty `test/fresh/debata-nova.mp4` – 640 MB,
+  lze smazat): přepis 73 s + mluvčí 17 s (jména z knihovny hlasů naskočila sama) + osnova 140 s + plán a sekvence 65 s
+  = **4,9 min** pro 42min video → hotový 3min střih (dřív řádově 12–30 min podle obsazení VRAM).
+  Dávkový přepis má o ~7 % víc „vět“ (dělení při pauze > 0,9 s / 20 s) a víc začátků malým písmenem (10 % vs 8 %);
+  plán je spojuje pravidlem pokračování, ve střihu se to neprojevilo. Vypnutí: `config.whisper.batchSize: 0`.
+- Codex po úpravě `AGENTS.md`: 7 volání místo 23, vstup 180k místo 510k tokenů, bez ukládání projektu, střih bez vad.
+- **Věty s odkazem na předchozí kontext** („Tím si to zhoršujeme.“, „Teď se nám podařilo jednat s partnerem…“):
+  kontrola tématu u každé věty vrací i `odkaz` ano/ne (model značí rozumně: #111, #284, #312). Takový celek se sloučí
+  s celkem, kde je předchozí věta (aby je zkracování nerozdělilo), nebo se předchozí věta předřadí. Plán debaty teď
+  ~40–70 s; dno je čtení promptu ve výběru vět (~16k tokenů textu kandidátních kapitol).
+- **Upoutávka ze zpráv přes panel** (`strepiny-ai-zdravi`, 30 s): Claude sám zavolal `detect_scene_cuts` (pravidlo
+  z CLAUDE.md), našel 2 hranice 0,07/0,18 s od skrytého řezu a posunul je – správně, ale 261 s / $0,43.
+  `detect_scene_cuts` teď ukládá výsledek do `cache/scenecuts` (soubor+velikost+mtime+citlivost; kratší rozsah
+  z delší analýzy), odfiltruje duplicitní/nahromaděné značky mimo rozsah (značky se ukládají na zdrojovou položku
+  a hromadí se z každého běhu), limit mostu 300 → 900 s (celých 6 min zdroje předtím nestihlo). 120 s zdroje ~30 s.
+  Každé volání pořád vytvoří dočasnou sekvenci „SCENE DETECT …“ (smazat přes API nejde).
+- **`detect_scene_cuts` přes celý zdroj je v praxi nepoužitelné**: 350 s zprávy nestihlo ani 15 min (Premiere počítá
+  na 1 jádře, neroste lineárně – 120 s ~30 s) a zablokovalo engine ExtendScriptu (Stop v panelu ukončí jen agenta,
+  už odeslané volání ExtendScriptu doběhne; agent navíc detekci po timeoutu zkusil znovu). Přidán parametr
+  **`ranges`** (okna kolem hranic klipů): host.jsx vyprázdní dočasnou sekvenci, položí okna za sebe, vybere je a spustí
+  detekci jednou; vrací jen řezy uvnitř oken. CLAUDE.md i panel prompt: jen s `ranges`, nikdy přes celý zdroj.
+  Okna nejdou do cache (cache = analýza od začátku). **host.jsx je potřeba znovu načíst** (`node scripts/es.mjs --reload`)
+  – pokud to v noci nešlo kvůli zablokované Premiere, udělej to ráno a otestuj (viz níže).
+- Ověřeno ráno (04:50): detekce po oknech (4 okna, 25 s zdroje) **7,8 s** a našla stejné řezy jako pomalá cesta
+  (178,48 / 347,16 s). Upoutávka přes panel v čisté relaci 135 s / $0,32 (předtím 261 s, nebo zablokování).
+  Claude přestavěl návrh (30 s) na 37 s → prompt: držet cílovou délku ±10 %. Timeout mostu (504) teď vrací hlášku
+  „nestihla odpovědět… NEOPAKUJ stejné volání“ (agent dřív po timeoutu zkusil totéž znovu).
+
+**Pokračování ladění 2026-09-24 ráno:**
+- **Instrukce MCP serveru** (dostává je každý klient) říkaly „přečti přepis celý“ – přepsány na úsporný postup
+  (plan_edit_local review, cílené čtení, ↳ = pokračování věty).
+- `build_sequence_from_transcript` i `build_from_plan` vrací **`continuity`**, když výběr celých vět utne souvětí
+  (pokračování s malým písmenem chybí / věta začíná uprostřed). Pokyny (panel, CLAUDE.md, AGENTS.md): postav znovu opraveně.
+- **Lokální stavba (`plan_edit_local` + `build`) nedolaďovala konce vět podle zvuku** (`refineOutPoints`) – doplněno,
+  stejně jako u build_sequence_from_transcript. Vrací i `continuity`.
+- `build.sceneCuts: true` → `snapToSceneCuts`: detekce střihů obrazu v oknech kolem hranic klipů; střih do 1,5 s
+  uvnitř klipu → hranice se na něj přesune, jen když mezi nimi není řeč (slovo se nikdy neuřízne), jinak upozornění.
+  `local-edit.mjs` (panel „Hermes lokálně“) to zapíná u cílů do 90 s. Ověřeno na reportáži AI a zdraví: konec
+  přesunut 347,23 → 347,16 s (stejný řez našel Claude), 1 upozornění. `detectSceneCutsCached` je sdílená funkce.
+- `local-edit.mjs` nerozpoznal „třicetisekundová“ (jen „-minutový“) → bez cílové délky vznikl 3min střih. Opraveno
+  (sekundové tvary, číslovky do „devadesáti“, „pětačtyřiceti…“).
+- `build_sequence_from_transcript` má také **`sceneCuts: true`** (stejná logika jako lokální stavba) – Claude u krátkých
+  zpravodajských sestřihů už ručně detekci nevolá (CLAUDE.md pravidlo 6, panel prompt). Upoutávka přes panel:
+  261 s / $0,43 → 135 s / $0,32 → **75 s / $0,20**.
+- `detect_scene_cuts` s `ranges` znovu používá pracovní sekvenci „SCENE DETECT …“ téhož zdroje (dřív každé volání
+  přidalo novou; Premiere z názvu odřízne příponu, proto porovnání podle začátku názvu). Okna se ořezávají na délku zdroje.
+- Omezení na mluvčího („jen výroky Vašíře…“, „co říká primátorka Ferancová…“) lokální model zvládá sám: 100 % daného mluvčího.
+
+**Film „2000 metrů do Andrijivky“ (2025, 1:47:54, převážně rusky) – první skutečně dlouhý a nečeský materiál:**
+- Přepis s `language: ""` (autodetekce → ru) **86 s** (dávkově), diarizace 27 s (16 mluvčích – terénní záznamy),
+  osnova 7,3 min (746 vět; shrnutí kapitol česky věrně odpovídají ruské řeči). S2 = vypravěč → `rename_speakers`
+  `{S2: "Vypravěč"}` s `enroll: false` (obecné jméno do knihovny hlasů nepatří).
+- **Chyba: `search_transcript` na azbuce nenašel nic** – `\b`/`\w` v JS regexu znají jen ASCII. Opraveno na unicodové
+  hranice (`(?<![\p{L}\p{N}])`, flag `u`); čeština fungovala jen díky odstranění diakritiky.
+- **Omezení na mluvčího deterministicky** (`_speakers_named`): „co říká vypravěč“, „jen výroky Vašíře“, „co řekla
+  Ferancová a co Vašíř“ → ostatní mluvčí model nevidí (sám u filmu vzal 60 s jiného mluvčího). Obraty jen/pouze/
+  říká/řekl/výroky/slova/mluví + jméno podle kmene; S1, S2… se nehledají; „bez moderátora“ omezení nespustí.
+- Plán vrací **`note`**, když se k zadání našlo < 85 % cílové délky (u vypravěče 75 s z 120 s) – ukazuje ho review
+  výstup i `local-edit`.
+- Plány na filmu: upoutávka 3 min (obecné zadání) 88 s → 177 s; vypravěč 2 min → 75 s + poznámka; drony 1 min 246 s → 58,5 s.
+- V projektu testicek2 vznikly sekvence „STRIH HERMES 11:17“ (vypravěč, lokálně) a **„UPOUTAVKA Andrijivka“**
+  (Claude v panelu, 2:05, gradace, `sceneCuts`, 215 s / $0,16).
+
+## 13. Titulky s překladem + dabing (2026-09-24)
+
+> **Dabing ZRUŠEN (2026-09-24, na přání uživatele)** – zůstávají jen titulky a jejich překlad. Odstraněno:
+> `add_dubbing`, `worker/dub.py`, host `placeAudio`, panel „Dabing“, `config.xtts`, `scripts/dub-qa.py`; XTTS
+> (tools/xtts, models/xtts, tools/rubberband) a `cache/dub` přesunuty do `O:\_smazat_dabing` (smaže uživatel;
+> originál je v O:\ALLDUB). Níže jen historie – poznatky o XTTS pro případný návrat.
+
+**Vícejazyčný přepis:** `transcribe_media language: ""` → faster-whisper `multilingual=True` (jazyk po úsecích).
+Dřív autodetekce z prvních 30 s určila jeden jazyk pro celý soubor a zbytek do něj „přeložila“ (film „2000 metrů do
+Andrijivky“: anglický vypravěč vyšel rusky). Klíč cache má `multilingual`, přepis má pole `multilingual`.
+Film teď: 708 vět, 211 anglicky, 495 azbukou, přepis 71 s.
+
+**Titulky s překladem:** `add_captions translate: "cs"` → Worker úloha `translate` (`worker/analysis.py`, Hermes/auto,
+dávky po 30 s číslem titulku `{"i","t"}` – samotné pole textů se jednou posunulo o jeden a časy dostaly cizí věty;
+nepřeložené/echo se překládá znovu po jednom). Útržky jedné věty (titulek se na střihu láme) se přeloží dohromady
+a překlad se rozdělí zpět podle délek. Titulek se nově láme i na konci věty. 25 titulků ~11–20 s.
+Panel: u titulků volba „jazyk: jak se mluví / přeložit do češtiny“.
+
+**Typografie titulků (2026-09-24, platí pro všechny titulky):**
+- `wrapCue` u dvouřádkových: vyvážený zlom (ne plný první řádek + zbytek), radši za interpunkcí, nikdy za
+  jednopísmennou předložkou/spojkou ani za řadovou číslovkou („k 3. / útočné“).
+- `timelineCues`: limit znaků s rezervou (80 → 72, řádky se lámou jen mezi slovy); plný titulek se dělí radši za
+  čárkou v posledních 5 slovech; jednopísmenné slovo na konci titulku přejde do dalšího; osiřelý konec věty
+  („myslet.“) si vezme poslední slova předchozího titulku (od čárky/spojky).
+- Překlad: hranice útržků podle poměru délek, ale radši za interpunkcí / před spojkou, ne za „v“/„3.“; útržek pod
+  2 slova se připojí k sousedovi (dřív samotné „Osud“ 2,6 s); titulek delší než 2 řádky se rozdělí na dva (čas podle
+  znaků); malé písmeno na začátku po konci věty/pauze → velké.
+
+**Dabing (`add_dubbing`, `worker/dub.py`)** – integrace PZ_AI_DAB_ALL (O:\ALLDUB) do MYpremiereMCP, bez Ollamy:
+- Z ALLDUB zkopírováno (robocopy): `runtime/python311_xtts` → `tools/xtts/python311`, `.venv_xtts` → `tools/xtts/venv`
+  (**`pyvenv.cfg` přepsán na novou cestu** – jinak „No Python at …“), `models` → `models/xtts` (xtts_v2 2,6 GB),
+  `tools/ffmpeg`, `tools/rubberband`. `tools/xtts/xtts_server.py` = kopie serveru z ALLDUB (opravené dvojité kódování
+  komentářů), cesty na MYpremiereMCP, port **7884** (ALLDUB má 7868), `XTTS_DEVICE`. `.gitignore`: jen server je v gitu.
+- Tok: `timelineCues` (sdílené s titulky, s mluvčím repliky) → sloučení útržků do vět (nedokončená věta + pokračování
+  do pauzy 2 s, krátké < 25 znaků) → `translate` → vzorky hlasů (`speakerSpans`: nejdelší promluvy mluvčího ~10 s)
+  → XTTS klon (`speed` 1.1, ořez ~0,6 s ticha, které XTTS přidává za každou repliku) → když se nevejde do místa
+  k další replice, rubberband do 1,4×, jinak mírný posun další repliky (nic se neuřízne) → mix se ztlumeným
+  originálem (−15 dB, rampy) → `cache/dub/<sekvence>.<čas>.wav` (vlastní název pro každý běh – soubor v projektu
+  Premiere drží) → host `placeAudio` na první prázdnou audio stopu (nebo stopu jen se starším dabingem) + mute původních.
+- XTTS se spouští na GPU jen při volné VRAM ≥ 3,5 GB, jinak CPU (~7 s na repliku; vedle Hermese vždy CPU).
+  Test 75 s sekvence (EN+RU): 9 replik, CPU 170 s, největší posun 1,1 s.
+- **Kontrola srozumitelnosti** `scripts/dub-qa.py <cache/dub/složka>` (Whisper přepíše repliky a porovná s textem):
+  0,51 → 0,68 po opravách. Na jednotlivých větách klon 0,84 ≈ vestavěný hlas 0,87 → klon zůstává (barva mluvčího).
+  XTTS má pro češtinu limity výslovnosti (stejné zjištění jako v ALLDUB).
+- Panel: tlačítko **„🎙 Nadabovat do češtiny“** + volba originál ztlumit/hodně/vypnout. Titulky i dabing běží
+  **přímo bez AI agenta** přes `scripts/run-tool.mjs` (dřív titulky přes Clauda – kredity + čas).
+- Vlastní dabing (`cache\dub`) se nepočítá jako zdroj řeči (jinak by se přepsal a přimíchal znovu).
+- **Srozumitelnost 0,53 → 0,84** (upoutávka 18 replik, TEST DABING 9 replik):
+  - Vzorky hlasu byly špatné: nejdelší segmenty = často křik z bojiště, hudba s halucinovaným slovem (1 „slovo“
+    přes 24 s), jiný člověk ve stejném štítku diarizace. `speakerSpans` teď bere úsek od prvního do posledního slova,
+    jen hustou řeč (≥ 1,5 slova/s) a řadí podle jistoty slov Whisperu × délky; vrací i `quality`. Pod 0,7 → mluvčí
+    rovnou vestavěným hlasem (`fallbackSpeaker`).
+  - **Samokontrola replik** (`xtts.verify`, `verifyMin` 0,75): Whisper (large-v3, beam 1, ~0,6 s/replika na GPU)
+    přepíše každou repliku; při špatné shodě klon s jiným seedem → vestavěný hlas; nechá nejlepší (vestavěný jen když
+    je o 0,05 lepší). Klon pod 0,5 → rovnou vestavěný. Mluvčí s opakovaně selhávajícím klonem mluví dál vestavěným
+    (méně střídání hlasů). Log `dabing: pokus …` ve worker.log, výsledek `fallbacks`.
+  - Hash úlohy dřív neobsahoval vzorky → po změně vzorků se použily staré repliky z cache (opraveno).
+  - Temperature XTTS (0,1–0,75) nepomohla konzistentně (server ji nově umí: `temperature`, `top_p`, …).
+  - Krátké repliky (≤ 4 slova) klon často zkomolí/přidá slabiky – vestavěný hlas je tam spolehlivější.
+  - Zbytek chyb: jména (Fedja → „Fedia“ – chyba měření) a špatný zdrojový přepis křiku (ASR, ne překlad).
+  - **Ořez blábolení na konci** (XTTS přidává slabiky „…roky kájo“, „ahoj“, „kit“): kontrolní Whisper (beam 5 –
+    beam 1 slil blábolení s posledním slovem) s časy slov; konec = poslední slyšené slovo podobné poslednímu
+    očekávanému (bez diakritiky, ≥ 0,6, mezi posledními 6 slovy) → uříznout +0,12 s a 30ms dozvuk. Přesná shoda
+    slov uřízla skutečný konec („zbraň“ slyšeno „zbraně“) – proto podobnost. Kontrola běží i u mluvčího přepnutého na
+    vestavěný hlas (dřív jediný pokus = bez kontroly).
+  - **Repliky do 2 slov** („Vím.“) XTTS zkomolí a Whisper izolované slovo nepozná → namluví se s nosnou větou
+    „A to je všechno.“, posoudí v kontextu a nosná věta se podle časů slov odřízne (bez ořezu → pokus se zahodí).
+  - **Čísla**: porovnání textu s přepisem převádí číslice na česká slova (`_cs_number`) – Whisper píše „22“, dabing
+    „dvacet dva“; dřív falešné neúspěchy a zbytečné pokusy. `dub-qa.py` používá stejné porovnání.
+  - Překlad pro dabing (`translate` s `speech: true`): řadové číslovky slovy („3. brigáda“ → „třetí brigáda“),
+    zkratky rozepsat. Zkratky (ChNUR) model stejně nechává – XTTS je čte foneticky skoro správně („snůr“).
+  - Skóre (férové měření, beam 5): upoutávka 0,84, TEST DABING UA (26 replik, ukrajinsky) 0,89, TEST DABING
+    Andrijivka 0,89 (dřív 0,53 / 0,81 / 0,68). Zbylé „chyby“ jsou hlavně měření (jména, nadávky z křiku, „zbraně“).
+    Čas na CPU (GPU drží Hermes): ~10 s na repliku včetně kontroly.
+  - `placeAudio`: nejdřív stopa se starším dabingem (smaže všechny starší dabingy), až pak prázdná; stopu odmutuje.
+    (Pozor ExtendScript: v regexu `[\\/]` je syntax error – nutné `[\\\/]`.)
+
+**Chyby nalezené cestou:** `add_captions force:true` prosakovalo do přepisu (→ nový přepis celého filmu v češtině,
+index přepnut) – `timelineCues` teď předává přepisu jen jazyk; index filmu vrácen na `…cb1983e6318e.json`.
+Při refaktoru jsem omylem přesunul část server/index.js (první výskyt řetězce byl v jiném nástroji) – obnoveno
+beze ztráty (ověřeno diffem proti HEAD s/bez mezer); poučení: u velkých přesunů hledat v rámci konkrétního nástroje.
+
+**Volba hlasu dabingu (2026-09-24):** `add_dubbing voice` = `"clone"` (výchozí, klon mluvčích) nebo jméno vestavěného
+hlasu XTTS pro všechny repliky („Viktor Eka“, „Damien Black“, „Ana Florence“); `keepOld: true` = starší dabing
+zůstane a nový jde na další stopu (porovnání). Panel: výběr „hlas“ + „nechat starý“. Test FINÁLNÍ TEST UA:
+klon 0,89 vs. Viktor Eka 0,84 (klon na čistém materiálu vychází srozumitelněji i barvou).
+
+**Test titulků po zrušení dabingu (2026-09-24)** – `scripts/srt-qa.py soubor.srt [znaků] [řádků]` (délka řádků,
+předložka na konci, překryvy, < 0,7 s, > 7,5 s, rychlost čtení > 21 zn/s, osiřelé slovo, malé písmeno po konci věty).
+Sekvence TT CZ přepis / TT CZ překlad / TT FILM přepis / TT FILM překlad (diskuse1.mp4 + film, se střihy):
+výchozí 2×40 → 0 / 0 / 0 / 1 problém (dřív 1 / 1 / 5 / 12). Opraveno:
+- překlad: skupina útržků do pauzy 5 s (dřív 2 s → „Ruské“ / „Síly jsou…“ přeloženo zvlášť), max 10 útržků (6 usekl
+  souvětí → „kilometrů v“ / „posledních dnech“); dělení za předložkou zakázáno (postih 1000) i při dělení přeplněného
+  titulku; text bez písmen („1.30“) se nepřekládá; přerostlý překlad (> 3× originál nebo „ / “ – model „přeložil“
+  celý kontext) se přeloží znovu bez kontextu, jinak originál; limit znaků na skupinu (`maxLen` = max(originál,
+  17 zn/s × doba řeči)) → překlad se zhustí (rychlost čtení 25 → ≤ 21 zn/s).
+- všechny titulky: velké písmeno po konci věty / na novém klipu; rychlý (> 17 zn/s) nebo krátký (< 1 s) titulek se
+  prodlouží do ticha (max +1,5 s, po další titulek a konec klipu); krátký nedokončený útržek před pauzou ≤ 3 s se
+  spojí s pokračováním („Russian“ + „forces are dug in.“); dělení za čárkou jen když první část je aspoň z půlky plná.
+- 1×30 znaků (extrém) u rychlého řečníka: 7 drobností (krátké titulky) – s tak krátkým řádkem nejde úplně vyhnout.
+- Chyba nalezená testem: jednořádkový režim padal (index −1 v přesunu osiřelého konce) – opraveno.
+
+## 14. Srovnání Hermes / Claude / GPT na filmu + redakční krok (2026-09-24)
+Zadání (panel): „Sestříhej to nejdůležitější jako nejsrozumitelnější sdělení o válce na Ukrajině. do jedné minuty“,
+film 2000 Meters to Andriivka (90 min, 708 vět). `scripts/compare-film.mjs` (SRC/OUT/TASK v env), výsledky
+`test/agent-compare-film*/results.json`.
+- **Chyba:** `local-edit.mjs` nepoznal délku slovy („do jedné minuty“) → plán bez cíle, 319 vět / 17 min. Opraveno
+  (`targetSeconds`: „jedné minuty“, „minutu“, „dvě minuty“, „půl minuty“, „minuta a půl“, „třicet sekund“…).
+- 1. kolo: GPT-6-Astra 8/10 (vypravěčský oblouk, 348 s, ~770 tis. tokenů), Claude 5/10 ($0,145, 165 s),
+  Hermes 4/10 (143 s) – Hermes i Claude (přebírá lokální návrh) vybrali ruské výkřiky z bojiště.
+- **Redakční krok v `plan_edit`** (fáze `edit`): když kandidáti > 3× cíl, model dostane celky s textem a délkou
+  a sestaví střih jako celek (úvod – jádro – pointa, souvislý komentář, bez výkřiků/útržků); vybrané mají při
+  dorovnání přednost, zbytek jde do náhradníků. 1 volání (~7,5 tis. tokenů, ~12 s). `continues()` bere i začátek
+  interpunkcí („.s officials say“ = rozdělené „U.S.“).
+- 2. kolo: Hermes – oblouk „největší operace od 2. sv. války → les → boj → ztráty → protiofenzíva selhávala →
+  zbylo jen jméno“ (126 s); Claude – souvislý vypravěč bez výkřiků, 68 s, $0,20, 303 s.
+- Panel: Codex výchozí **GPT-5.6-Sol** (Astra „(drahé)“ jen volitelně; localStorage klíč `pmcp.model.codex.v2`).
+
+### 14b. Mistrovský střih – noční ladění (2026-09-24/25)
+Plán `plan_edit` má nově pro dlouhý materiál vs. krátký cíl (kandidáti > 2× cíl) tyto kroky:
+1. **Teze** (fáze `thesis`, 1 volání): z osnovy jedna věta „co má střih divákovi předat“ + kapitoly úvod/pointa.
+   Věty klíčových kapitol se přidají mezi kandidáty (výběr po oknech pointu filmu nevybral – nevidí celek).
+2. **Filtr výkřiků** (bez LLM): celky ≤ 6 slov nebo s „!“ ≤ 10 slov ven (ne u zadání „atmosféra/akce/emoce“).
+3. **Redakce** (fáze `edit`): kandidáti s nadpisy kapitol, tezí a podílem řeči mluvčích (pozná vypravěče);
+   model napíše osnovu a vybere celky; když přestřelí (> 1,3× cíl), až 2× sám zkrátí. Pointa povinná
+   (chybí-li úsek z pointové kapitoly, doplní se). Vstup + 1 úsek pointy chráněné (skóre 4).
+4. **attach_context** (bez LLM, do celku, před dorovnáním i na konci): začátek souvětí řetězově, pokračování
+   malým písmenem, krátká předchozí věta u věty odkazující dozadu („how is THIS possible?“, „It's who they are“).
+5. **trim**: chráněné úseky až úplně nakonec; když nejde vyhodit nechráněný bez pádu pod lo, radši +9 %.
+- Nalezené chyby: `"\b"` přes heredoc v souboru jako znak backspace (regex nikdy nechytil) – píš Python
+  úpravy přes soubor (Write), ne heredoc; `trim` vyhazoval pointu (nejkratší „nejbližší k cíli“);
+  zkracovací smyčka omylem za `break`.
+- Výsledky (Hermes): People's Fight 1 min – oblouk „válka za pár dní → jak je možné, že vzdorují → drony →
+  stínová armáda dobrovolníků… nevzdají se“ (= úroveň GPT); Claude na něm 9/10 ($0,12).
+  Sada filmů `scripts/test-plan-films.mjs` (upoutávka 30 s 7/10, dobrovolníci 8,5, příběh 7,5, drony 6,5,
+  cena 7) – délky ±2 %, 0 useknutých. Rychlý náhled: `scripts/plan-review.sh <zdroj> "<zadání>" <s>`.
+- Claude: `reviewText` ukazuje tezi a „redakčně složeno“; `agent-system.md`: vstup/pointu neměnit, jen vady.
+
+### 14c. Ladění Hermese na nové debatě (2026-09-26)
+Nové video `test/fresh/debata-nova.mp4` (42 min, 389 vět, Ferancová vs. Vašíř), zadání „hlavní spor obou
+kandidátů – v čem se zásadně liší a co si vyčítají“, cíl 120 s. Referencí byl ruční výběr: #53 (město stojí
+na místě) → #43–46 (zastavená parkovací politika, ¾ mil. za kampaň, „za to by se dal předláždit chodník“)
+→ #314–319 (obhajoba: systém nebyl připravený) → #256/257 (ideový rozdíl jako pointa).
+
+**Čtyři nalezené příčiny (všechny měřené, ne odhadem – diagnostika `PLAN_DEBUG=<soubor>` vypíše celky,
+které redakce dostala, její osnovu a výběr; bez toho jsem to dvakrát hádal špatně):**
+1. **Slabé věty vs. „nejlepší v kapitole“** – osnova označí #43 za nejsilnější větu kapitoly *i* za slabou
+   („přeřeknutí“), prompt pak říkal „bez přeřeknutí“ → nejostřejší výrok vypadl. U tohohle materiálu navíc
+   „přeřeknutí“ bývá jen chyba přepisu („zpuštěním“, „tři stvrti milionu“). Nově `_weak_note()`: *nepoužitelné*
+   (vata, nesrozumitelné, opakování) vs. *drobná vada* (vyber, když obsah sedí); věta z `best` se neoznačí vůbec.
+2. **Vztahové zadání jako pseudo-téma** – „hlavní spor / rozdíly / výčitky“ se vracely jako témata a kontrola
+   tématu pak vyhodila konkrétní důkazy sporu. `_instruction_topics` je filtruje (seznam `meta`).
+3. **Pozor na záměnu „bez tématu“ = „přehled“** – první verze opravy nastavila `general=True`, což zapne
+   `over_chapter` (trestá víc úseků z jedné kapitoly) → výběr se rozprostřel tence přes 30 kapitol. Proto nový
+   příznak `relational`: téma se nekontroluje, ale výběr se *neroztahuje*.
+4. **Redakce sbírala bloky místo výběru** – ze 180 celků vybrala 52 (3× cíl), zbytek dořezal mechanický trim
+   a vyhodil právě ty krátké úderné. Model teď dostává konkrétní **počet úseků** (`target / medián délky`)
+   a pravidlo, že kapitola označená „(klíčová)“ musí být zastoupená konkrétním výrokem (číslo, jmenovaná věc).
+5. **Mechanika pořadu jako „vstup s kontextem“** – model otevíral střih moderátorovou znělkou („Začíná další
+   vydání pořadu…“, „Magistrát má 45 členů“). Zákaz v promptu **nefungoval** (zkoušeno, vybral je znovu), proto
+   deterministicky: u pořadu se 3+ mluvčími se do redakce nenabízejí moderátorovy věty **bez otazníku**
+   (mechanika), otázky zůstávají – když se vybere odpověď, `complete()` otázku doplní zpět.
+
+**Stav:** délka sedí (119 s / 120, u tématu 89,9 / 90), veškerá mechanika pořadu je pryč, do střihu se dostávají
+konkrétní výtky s faktem (#304/305 – parkovací automaty roky ve skladu, propadlá záruka). **Úroveň Claude to
+ještě není:** začátek občas útržek (#55 „Neschopnosti města víc vstříc…“ – Whisper rozdělil jednu větu na #54+#55
+a druhá půlka začíná velkým písmenem, takže `continues()` ji nechytí) a u vztahového zadání převáží jedna strana
+(Ferancová ~75 s ze 119). **Další krok:** vyvážení stran u `relational` zadání a detekce falešného rozdělení věty
+(první slova druhé půlky opakují poslední slova první).
+
+**Pokračování (stejný den):** doplněno ještě
+6. **Vyvážení stran u `relational`** – u sporu sklouzával střih k souvislému programu jedné strany
+   (Ferancová 75 s ze 119). Prompt dostal pravidlo „obě strany zhruba stejně, tvrzení–protitvrzení,
+   konkrétní výtka má přednost před popisem vlastního programu“; strany se teď střídají.
+7. **Povinné zastoupení klíčových kapitol** (rozšíření dosavadního pravidla o povinné pointě): když model
+   kapitolu označenou za klíčovou úplně vynechá, doplní se z ní jeden úsek – přednost má úsek s číslem
+   (konkrétní výtka unese víc než obecná věta). **Pozor:** poprvé to vtáhlo zpět znělku pořadu, protože
+   kapitola „Úvod a hosté pořadu“ bývá klíčová (vstup) a její věta končí otazníkem, takže prošla i filtrem
+   mechaniky – proto se do vynucení nepouští moderátor.
+
+**Stav po iteraci:** vztahové zadání 119 s/120, žádná mechanika pořadu, rozumný vstup (#57 pojmenuje problém),
+strany se střídají, pointa #382. Tématické zadání 89,9 s/90, bydlení i parkování vyvážené. **Zbývá:** #43–46
+(zastavená parkovací politika, ¾ mil. za kampaň) se trefí jen tehdy, když thesis označí K5 za klíčovou – ta ale
+vrací jen kapitoly *úvod* a *pointa*, ne „nejdůležitější pro zadání“. Nabízí se doplnit mezi klíčové i kapitoly
+s nejvyšším skóre relevance (v `why` jsou K-skóre 0–3, K5 mívá 3).
+
+## 15. Hermes přestěhován do projektu (all-in-one) (2026-09-28)
+Uživatel chtěl, aby projekt nebyl závislý na samostatné instalaci v `O:\Hermes`. Přeneseno **jen to, co
+projekt potřebuje** – server a model, ne celá asistentská aplikace:
+- `models/hermes/` – `Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf` (22,4 GB) + `mmproj-…-F16.gguf` (0,9 GB); velikost
+  ověřena bajt na bajt proti zdroji.
+- `tools/llama.cpp-hermes/` – vlastní llama.cpp **build 11118** (novější než projektový b10984, Qwen3.6
+  potřebuje `--n-cpu-moe` a `--reasoning-budget`), proto vedle stávajícího, ne přes něj.
+- `hermes/`, `chrome-profile/`, `cron`, `dashboard` z O:\Hermes se **nekopírovaly** – to je samostatná
+  asistentská aplikace uživatele, do střihového projektu nepatří.
+- `scripts/hermes.ps1 start|stop|status` (+ `-Vize` pro mmproj) – spouští server ze složky projektu
+  s ověřenými parametry z původního `switch-llm.ps1` (30 ze 40 MoE vrstev v RAM = vejde se do 12 GB VRAM).
+  Zabíjí **jen vlastní** proces (podle cesty), takže Ollama ani cizí Hermes nejsou dotčené.
+- `config.json` → `llmBackends.hermes` má nově `server`/`modelFile`/`mmproj`/`start`; Worker ho dál **sám
+  nespouští** (na 12GB GPU by se pral s Whisperem) – to je záměr, ne opomenutí.
+- `INSTALL/install.ps1` krok [7b]: Hermese vezme z offline balíku, když tam je (stahovat 22 GB nemá smysl).
+- `models/` i `tools/` jsou v `.gitignore`, takže do gitu nic z toho nespadne.
+
+**Past, na kterou jsem narazil:** `scripts/hermes.ps1` napsaný s diakritikou a bez BOM PowerShell 5.1 načte
+jako ANSI a skript spadne na „The string is missing the terminator“. Projekt má proto konvenci psát `.ps1`
+**bez diakritiky** (stejně jako `install.ps1`). Pozor na zrcadlový případ: JSON naopak BOM **nesmí** mít (5z).
+
+**Ověřeno naostro:** binárka běží (`--version`), model se načte z cesty v projektu a odpovídá česky
+(test na CPU na jiném portu, aby se nesahalo na běžící server uživatele); pak přepnuto na ostrý režim –
+externí Hermes zastaven, `scripts/hermes.ps1 start` naběhl na portu 8000, `worker_status` ho hlásí jako
+`running: true` a `plan_edit_local` přes něj postavil v Premiéře sekvenci „HERMES ALL-IN-ONE test“
+(91,5 s / cíl 90). Zpět na původní instalaci se lze kdykoli vrátit přes `O:\Hermes\switch-llm.ps1`.
+
+### 15b. Hermes přidán i do offline balíku (2026-09-28)
+Na dotaz „půjde to nainstalovat na jiném PC a bude tam Hermes?“ – původně ne: balík měl 16 GB (Whisper,
+gemma3, vision, wheels, node_modules), Hermes v něm chyběl a přenesl by se jen s celou složkou projektu.
+Doplněno na přání uživatele:
+- `INSTALL/offline/models/hermes` + `INSTALL/offline/tools/llama.cpp-hermes` (velikosti ověřeny proti
+  originálu), balík je teď **37,8 GB**.
+- `install.ps1`: kontrola místa připočte ~24 GB, **jen když** je Hermes v balíku a neběží se
+  s `-NoLocalLLM`/`-SkipModels` (hlásí „potreba ~39 GB“). Krok [7b] ho zkopíruje z balíku; stahovat se
+  nezkouší (22 GB z HuggingFace nemá smysl).
+- `INSTALL/README.md`: tabulka obsahu + poznámka, že se Hermes po instalaci **sám nespouští**
+  (`scripts\hermes.ps1 start`) a že bez ~12 GB VRAM je na CPU prakticky nepoužitelný (~9 tok/s) – tam
+  je lepší nechat plánovat gemma3 nebo Clauda.
+
+**Co se po instalaci na cizím PC napojí samo:** `register.mjs` zaregistruje MCP server do Claude Code
+(`claude mcp add --scope user`), Claude Desktop i Codexu, pokud tam jsou; `mcp.json` se přegeneruje na
+skutečnou cestu (to byla původní příčina z 5z). **Co samo nepojede:** Node.js 18+ a Python 3.11 musí být
+na stroji předem a Hermes se spouští ručně.
+
+## 16. Test na anglickém dokumentu odhalil dvě systémové pasti (2026-09-28)
+Uživatel pustil v panelu na film *Vladimir Putin: Power, Greed, Obsession* (57 min, **anglicky**) zadání
+„vyber ze všeho 3 minuty to nejpekelnější/nejstrašnější o Rusku a Putinovi", cíl 180 s, backend Hermes.
+
+**1. Panel přepsal cizojazyčný film s vynuceným `language: "cs"` → Whisper místo přepisu překládal.**
+Výsledek byl strojově rozbitý („Ekonomická inteligence unita" = Economist Intelligence Unit, „dostane si
+slovo slovo slovo", 4 zacyklené věty). Hermes tedy dostal nepoužitelný vstup a jeho výběr nešlo hodnotit.
+Po přepisu s `language: ""`: jazyk správně `en`, **552 vět / 8 432 slov místo 493 / 6 203 (+36 % obsahu)**,
+0 zacyklených vět. CLAUDE.md na to pravidlo má, ale panel jede na výchozí `cs` z `config.json`, takže
+**u každého cizojazyčného materiálu to nastane samo** – stojí za zvážení autodetekce (nebo varování),
+ne jen pravidlo v instrukcích.
+
+**2. Běžící Hermes zablokuje přepis.** Whisper na CUDA zůstal viset na 4 % (GPU 11,7/12,3 GB, 100 % využití,
+paměť držel llama-server). Po `scripts\hermes.ps1 stop` doběhl zbytek (49 % → 100 %) do ~30 s. Tj. pořadí
+musí být: přepis → teprve pak Hermes. Odpovídá to poznámce v `config.json`, proč Worker Hermese neřídí,
+ale v praxi to znamená, že si uživatel musí pořadí hlídat sám.
+
+**Vedlejší nález:** zdrojové MKV je poškozené (ffmpeg: „invalid as first byte of an EBML number“ na pozici
+1,686 GB z 1,765 GB = 95 % souboru), což přesně odpovídá chybě Premiéry „Frame substitution recursion …
+Inserting black for frame number 84838“ (84838/25 fps = 56,5 min z 59,4). Přebaleno `-c copy` do MP4
+(plná délka 59:23,75 zachována). Druhý film (x265 MKV) přebalen taky, s `-tag:v hvc1` kvůli Premiéře.
+
+**Rozložení výběru (na starém přepisu, jen orientačně):** 15 z 16 klipů z prvních 11,5 min filmu, pak jediný
+skok na 46:21 – zbylých ~60 % stopáže nezastoupeno, přestože zadání znělo „ze všeho“. Ověřit znovu na
+opraveném přepisu.
+
+### 17. Zastaralá analýza po novém přepisu (opraveno) + pád Premiéry na poškozeném MKV
+
+**Chyba:** `cache/analysis/index.json` je klíčovaný jen cestou ke zdroji. Když se zdroj přepíše znovu
+(jiný `language`, `force`), index pořád ukazuje na analýzu postavenou nad STARÝM přepisem. `get_outline`
+pak vrátil osnovu s ID vět ze starého přepisu (493 vět, cs), zatímco `get_transcript` už vracel nový
+(552 vět, en) – čísla vět si neodpovídala a střih podle takové osnovy by řezal úplně jiné věty.
+Selhání je tiché, nic se nezobrazí jako chyba.
+
+**Oprava:** `server/index.js` – nový `loadAnalysis(source)` porovná `analysis.transcript` s přepisem,
+na který ukazuje aktuální index; při neshodě vrátí `null` a `get_outline` řekne „není analýza
+k aktuálnímu přepisu“. Analýzu tedy raději zahodíme, než abychom nechali stavět podle posunutých ID.
+
+**Pád Premiéry:** při práci se sekvencí nad `vladimir.putin...cbfm.mkv` Premiere spadla
+(„došlo k chybě a musí být ukončen“), dřív hlásila „Inserting black for frame number 84838“.
+Sedí to na poškození MKV na pozici 1 686 128 355 B. Přebalený `vladimir.putin.power.greed.obsession.2022.mp4`
+má stejnou délku (3563,75 s) a je o 73 MB menší. Pro takové zdroje stavět sekvence z přebalu, ne z originálu.
+Přepis se znovu nedělá – stačí do `cache/transcripts/index.json` a `cache/analysis/index.json` přidat
+klíč s cestou k přebalu ukazující na stejný JSON (časy jsou identické, je to stream copy).
+
+**Dovětek (19:05):** poškození se přeneslo i do přebaleného MP4 (stream copy) – ffmpeg hlásí chybu dekódování
+jen v okně 3390–3394 s, zbytek filmu čistý. Druhý pád Premiéry nastal při `build_sequence_from_transcript`
+se `sceneCuts`, kde poslední věta #552 končila na 3392,3 s – tedy uvnitř poškozeného okna. Řešení: překódovat
+video (h264_nvenc, `-c:a copy`, `-fps_mode passthrough` – časy se nemění, přepis zůstává platný).
+Pozor: první pokus o překódování spadl, protože disk D: byl úplně plný (68 KB) – výstup psát na disk s místem
+a před dlouhým kódováním zkontrolovat `df`.
+
+### 18. Titulky s překladem blikaly útržky + Hermes u „otřesného" zadání volil techniku (2026-09-28 večer)
+
+**Titulky (`add_captions` s `translate`):** překlad se rozkládal do původních anglických titulků, které jsou při
+krátkém řádku (20 znaků, 1 řádek) jen 1–3 slova a zlomek sekundy. Výsledek na Putinovi: 21 ze 143 titulků přes
+limit znaků, 36 kratších než 0,7 s („že" 0,15 s). Kontrola délky navíc přeskakovala titulky do 3 slov.
+**Oprava:** skupina se rozdělí na bloky po klipech (přes střih nikdy), překlad se mezi bloky rozdělí podle délky
+originálu (`splitByWeights`) a každý blok se znovu zalomí do titulků ≤ limit (`reflowCue`, DP – co nejméně
+titulků, vyrovnaně, radši za interpunkcí, nikdy za „v"/„k"). Časy podle znaků přes úseky, kdy v bloku zněla
+řeč. Ověřeno živě na Hermesově sekvenci: 0 přes limit, 2 krátké, 0 překryvů.
+
+**`scripts/run-tool.mjs`:** MCP SDK (`StdioClientTransport`) předává serveru jen pár systémových proměnných –
+`PLAN_DEBUG` se proto k workeru nikdy nedostal (ladicí výpis „nefungoval"). Teď `env: process.env`.
+
+**Hermes – režim „otřesné zadání"** (`intense` v `plan_edit`, spouští ho otřes|strašn|pekeln|krut|drastic|
+brutál|šokuj|děsiv|hrůz|horor; samotné „nejsilnější" NE – u debaty to znamená argumenty). Diagnóza přes
+PLAN_DEBUG na Ukraine from Above: svědectví (E40, Buča, Mariupol) redakce dostala, ale teze vyšla obecná
+(„asymetrický boj… technologie"), model vybral souvislé bloky o dronech a zkracování pak vyhodilo E40.
+Filtr výkřiků (≤ 6 slov) navíc vyhodil „That person was shot." a „Some appear to have been executed."
+Změny jen při `intense`: teze = to nejhorší, co materiál dokládá; redakce řadí podle dopadu na diváka, více
+různých událostí, ne jeden blok; zkracování vyhazuje nejdřív techniku; krátké oznamovací věty (3–6 slov
+s tečkou) filtr výkřiků nechá.
+
+### 19. Skutečná příčina pádů 2 a 3: tichá záměna zdroje (opraveno) + export s titulky
+
+`build_sequence_from_transcript` / `build_sequence_without_pauses` mají parametr `source`, ostatní nástroje `path`.
+Volání s `path` (neznámý klíč → zod ho zahodí) spadlo do `singleTranscribedSource()` → `lastSource` = naposledy
+čtené poškozené MKV. Sekvence „opraveny zdroj" tak ve skutečnosti stály na MKV a Premiere na něm padala.
+**Oprava:** `path` je u obou nástrojů synonymum `source`; když se zdroj dohledá, výsledek to hlásí v poli `source`.
+Projekt: položka MKV přepojena `changeMediaPath` na `O:\DETAIL\premiere\zdroje\vladimir.putin.2022.fixed.mp4`
+(s dopřednými lomítky vrací false – nutná zpětná; záloha `backups\testicek2.2026-09-28T20-10-34-634Z.prproj`).
+
+**Export s vypálenými titulky:** výchozí export preset vypálí i nativní CC stopu – s vlastním SRT přes ffmpeg pak
+byly titulky dvoje. Minutová verze proto složena ffmpegem přímo ze zdroje podle in/out z `get_sequence`
+(trim/atrim + concat + subtitles, 25 fps nativně – sekvence v Premiere měla 23,976) → `Downloads\PEKLO_1min_Putin_titulky.mp4`.
+Titulky do obrazu ručně redigované (strojový překlad: „barvy otravy zářením" z ASR „dyes" místo „dies",
+„otrávíš se" místo „otráví tě", rozbitá věta o „zakládajícím zločinu").
+**Překlad titulků – `maxLen`** teď 17 zn./s i pod délku originálu (min 60 %); Hermes limit u rychlé pasáže
+přesto nedodržel (71 požadováno, ~100 dodáno) – zhušťování lokálním modelem zatím nespolehlivé.
+
+### 20. MKV → MP4 automaticky před Premiere (2026-09-29)
+
+Uživatel: Premiere padá už při samotném importu MKV (x265 filmy s obalem jako mjpeg stopou a SubRip titulky).
+**`worker/media.py`, úloha `prepare_media`** (PyAV z venv – funguje i bez ffmpeg v PATH): MKV/WebM → MP4 v
+`cache/media/<klíč>/<název>.mp4` (položka v Premiere má jméno filmu). H.264/HEVC se jen přebalí (HEVC s tagem
+`hvc1`), zvuk ne-AAC → AAC, obal/titulky se vynechají. Když demux hlásí chybu (PyAV má log FFmpegu ve výchozím
+stavu VYPNUTÝ – nutné `av.logging.set_level(ERROR)`, jinak Capture nic nechytí), obraz se překóduje (h264_nvenc,
+fallback libx264), pts zachovány. Změřeno: čisté x265 59 min přebalení 13 s; poškozený Putin 6 min 15 s,
+v okně 3380–3405 s 0 chyb dekódování, PSNR proti originálu ~42 dB ve 3 časech (políčka sedí).
+`cache/media/index.json` mapuje převedený soubor na originál.
+**Server:** `premiereMedia()` na všech vstupech do Premiere (buildAndReport vč. extra audia, detectSceneCuts,
+import_media, multicam buildTimeline). `originalMedia()` v `transcribe()`/`loadTranscript()` – přepis se hledá u
+originálu (titulky nad sekvencí z převedeného MP4 nespustí nový přepis).
+**Panel:** tlačítko „🎬 Vložit video…“ (výběr souborů → `import_media` přes run-tool). Ověřeno živě: MKV přes
+import_media → v projektu MP4, Premiere běží. Po úpravě panelu nutné panel zavřít a otevřít.
+Pozor na místo: převedené filmy leží na O: (1,4–4 GB kus).
+
+**Změna 2026-09-29 (přání uživatele): převedené MP4 se ukládá VEDLE ORIGINÁLU** (`<název>.mp4`). Cizí stejnojmenný
+soubor se nepřepíše → `<název> (převedeno).mp4`. Když na disku originálu není místo (velikost × 1,3 + 1 GB – D: měl
+2,2 GB) nebo složka není zapisovatelná, jde do `cache/media` a výsledek to hlásí (`fallback`). Starší převody
+v `cache/media` se dál používají (projekty se na ně odkazují). Nedokončený `.part.mp4` se při chybě smaže.
+Ověřeno: vedle originálu, opakované volání z cache, fallback u plného D:, cizí MP4 nepřepsáno.

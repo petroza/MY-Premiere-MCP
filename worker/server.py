@@ -10,6 +10,7 @@ import json
 import os
 import queue
 import re
+import socket
 import sys
 import threading
 import time
@@ -21,19 +22,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from worker.common import CONFIG, Cancelled, cache_dir, log, read_json, read_token, write_json  # noqa: E402
-from worker import analysis, asr, audiosync, diarize, frame, gpu  # noqa: E402
+from worker import analysis, asr, audiosync, diarize, frame, gpu, media  # noqa: E402
 
 VERSION = "0.2.0"
 HANDLERS = {
     "transcribe": asr.transcribe,
     "diarize": diarize.diarize,
     "rename_speakers": diarize.rename_speakers,
+    "list_voices": diarize.list_voices,
+    "forget_voice": diarize.forget_voice,
     "sync": audiosync.sync,
     "refine_edges": audiosync.refine_edges,
     "analyze": analysis.analyze,
     "plan_edit": analysis.plan_edit,
+    "translate": analysis.translate,
     "frame": frame.get_frame,
     "describe_frame": frame.describe_frame,
+    "prepare_media": media.prepare,
 }
 TOKEN = read_token()
 JOBS_DIR = cache_dir("jobs")
@@ -157,7 +162,8 @@ class Handler(BaseHTTPRequestHandler):
             models = {k: (Path(__file__).resolve().parent.parent / v).exists() for k, v in CONFIG["models"].items() if k != "whisperDownloadRoot"}
             running = [j["id"] for j in STORE.jobs.values() if j["status"] == "running"]
             return self._send(200, {"ok": True, "version": VERSION, "pid": os.getpid(), "codeStamp": CODE_STAMP,
-                                    "models": models, "running": running, "queued": STORE.q.qsize(), **gpu.status()})
+                                    "models": models, "llmBackends": gpu.backend_status(), "running": running,
+                                    "queued": STORE.q.qsize(), **gpu.status()})
         m = re.match(r"^/jobs/([0-9a-f]{12})$", self.path)
         if m:
             job = STORE.jobs.get(m.group(1))
@@ -194,14 +200,31 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
 
+class ExclusiveHTTPServer(ThreadingHTTPServer):
+    """Windows jinak (SO_REUSEADDR) pustí na stejný port DVA Workery zároveň – dotazy pak chodí
+    náhodně jednomu z nich a restart po změně kódu se nikdy neprojeví. Port držíme výhradně."""
+
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def main() -> None:
     port = int(CONFIG["worker"]["port"])
     gpu.kill_orphan_llama()
-    try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    except OSError as e:
-        log(f"Worker nelze spustit, port {port} je obsazený: {e}")
-        sys.exit(1)
+    httpd = None
+    for attempt in range(15):  # předchozí Worker mohl port ještě držet (restart po změně kódu)
+        try:
+            httpd = ExclusiveHTTPServer(("127.0.0.1", port), Handler)
+            break
+        except OSError as e:
+            if attempt == 14:
+                log(f"Worker nelze spustit, port {port} je obsazený: {e}")
+                sys.exit(1)
+            time.sleep(1)
     httpd.daemon_threads = True
     log(f"Worker {VERSION} (pid {os.getpid()}) poslouchá na 127.0.0.1:{port}")
     httpd.serve_forever()

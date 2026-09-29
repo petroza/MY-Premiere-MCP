@@ -54,6 +54,13 @@ async function bridge(url, payload, timeoutMs = 120000) {
     throw new Error(`${NOT_RUNNING} (${e.cause?.code || e.message})`);
   }
   const body = await res.json().catch(() => ({}));
+  if (res.status === 504) {
+    // ExtendScript běží dál i po vypršení limitu a engine je jednovláknový – opakované volání by čekalo za ním
+    // (agent tak jednou zopakoval detekci řezů a zablokoval Premiere na desítky minut)
+    throw new Error(`Premiere nestihla odpovědět do ${Math.round(timeoutMs / 1000)} s a nejspíš ještě počítá. ` +
+      'NEOPAKUJ stejné volání – zmenši rozsah (např. detect_scene_cuts s ranges), nebo počkej. ' +
+      'Pokud je v Premiere otevřený dialog, zavři ho.');
+  }
   if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
   return body.raw;
 }
@@ -85,14 +92,32 @@ function loadIndex() {
 
 // Slabší modely (např. Haiku) při delší konverzaci občas zapomenou předat povinné "path"/"source" -
 // místo syrové zod chyby ("expected string, received undefined") zkus dohledat jednoznačný zdroj sám.
+// Zdroj, se kterým agent v tomto běhu naposledy pracoval (server běží pro každý běh agenta zvlášť).
+// Když ho v dalším volání vynechá (stává se i Sonnetu), vezme se tentýž – místo chyby a dalšího kola.
+let lastSource = null;
 function singleTranscribedSource() {
-  const keys = Object.keys(loadIndex());
+  const idx = loadIndex();
+  if (lastSource && idx[normKey(lastSource)]) return lastSource;
+  const keys = Object.keys(idx);
   return keys.length === 1 ? keys[0] : null;
 }
 function missingSourceError(candidates) {
+  // jen pár nejnovějších – celý seznam cache jsou zbytečné tokeny
+  const recent = candidates
+    .map((k) => {
+      try {
+        return { k, t: fs.statSync(loadIndex()[k]).mtimeMs };
+      } catch {
+        return { k, t: 0 };
+      }
+    })
+    .sort((a, b) => b.t - a.t)
+    .slice(0, 5)
+    .map((x) => x.k);
   return new Error(
     candidates.length
-      ? `Cesta k videu nebyla zadána a v cache je přepisů víc – urči "path" (jeden z: ${candidates.join(', ')}).`
+      ? `Cesta k videu nebyla zadána a v cache je přepisů víc – urči "path" (nejnovější: ${recent.join(', ')}` +
+          `${candidates.length > 5 ? ` … a ${candidates.length - 5} dalších` : ''}).`
       : 'Cesta k videu nebyla zadána a v cache ještě není žádný přepis – urči "path" (zkus list_project_items).',
   );
 }
@@ -175,10 +200,32 @@ function workerCodeStamp() {
 
 let workerStarting = null;
 async function ensureWorker() {
+  let releaseLock = () => {};
   try {
-    const h = await workerFetch('/health', { timeoutMs: 3000 });
+    const h = await workerFetch('/health', { timeoutMs: 8000 });
     // Worker se starší verzí kódu, který zrovna nic nedělá → restart (jinak by běžel starý kód)
     if (h.codeStamp === undefined || h.codeStamp === workerCodeStamp() || h.running?.length || h.queued) return;
+    // restartovat smí jen jeden proces – jinak si paralelní skripty navzájem berou port
+    const lock = path.join(ROOT, CONFIG.cacheRoot || 'cache', 'worker.restart.lock');
+    try {
+      const age = Date.now() - fs.statSync(lock).mtimeMs;
+      if (age < 60000) return; // restartuje někdo jiný, starý Worker zatím stačí
+      fs.unlinkSync(lock);
+    } catch {
+      /* zámek neexistuje */
+    }
+    try {
+      fs.writeFileSync(lock, String(process.pid), { flag: 'wx' });
+    } catch {
+      return; // zámek mezitím vytvořil někdo jiný
+    }
+    releaseLock = () => {
+      try {
+        fs.unlinkSync(lock);
+      } catch {
+        /* už je pryč */
+      }
+    };
     await workerFetch('/shutdown', { method: 'POST', timeoutMs: 5000 }).catch(() => {});
     await sleep(2000);
     if (h.pid) {
@@ -188,7 +235,15 @@ async function ensureWorker() {
         /* už skončil */
       }
     }
-    await sleep(1000);
+    // počkej, až starý Worker opravdu pustí port – jinak nový skončí na "port je obsazený"
+    for (let i = 0; i < 15; i++) {
+      try {
+        await workerFetch('/health', { timeoutMs: 1000 });
+        await sleep(1000);
+      } catch {
+        break;
+      }
+    }
   } catch {
     /* spustíme */
   }
@@ -206,9 +261,13 @@ async function ensureWorker() {
         /* ještě startuje */
       }
     }
-    throw new Error('Worker se nespustil do 90 s – viz cache/worker.log');
+    // poslední pokus: když Worker (byť starší verze) odpovídá, je to lepší než tvrdá chyba
+    await workerFetch('/health', { timeoutMs: 3000 }).catch(() => {
+      throw new Error('Worker se nespustil do 90 s – viz cache/worker.log');
+    });
   })().finally(() => {
     workerStarting = null;
+    releaseLock();
   });
   return workerStarting;
 }
@@ -263,7 +322,37 @@ function loadIndexed(kind, source) {
   return f && fs.existsSync(f) ? readJson(f) : null;
 }
 
+// Premiere padá na MKV už při importu (x265 filmy, obal jako mjpeg stopa) a poškozená data ji shodí i později
+// při přehrávání. Každé MKV/WebM proto před Premiere převede Worker na MP4 (worker/media.py – obraz se jen
+// přebalí, poškozený soubor se překóduje). Přepisy zůstávají u originálu: časy jsou stejné a převedený soubor
+// se na originál mapuje zpátky (originalMedia), takže se nic nepřepisuje znovu.
+const PREMIERE_UNSAFE = /\.(mkv|webm)$/i;
+async function premiereMedia(p, extra) {
+  if (typeof p !== 'string' || !PREMIERE_UNSAFE.test(p) || !fs.existsSync(p)) return p;
+  return (await runJob('prepare_media', { path: p }, extra)).file;
+}
+function originalMedia(p) {
+  if (typeof p !== 'string') return p;
+  try {
+    return readJson(path.join(ROOT, 'cache', 'media', 'index.json'))[path.resolve(p).toLowerCase()] || p;
+  } catch {
+    return p;
+  }
+}
+
+// Analýza je vázaná na konkrétní přepis. Po novém přepisu (jiný jazyk, force) index analýzy pořád
+// ukazuje na tu starou – a její ID vět už neodpovídají tomu, co vrací get_transcript. Radši ji
+// zahodíme, než abychom nechali stavět střih podle posunutých čísel.
+function loadAnalysis(source) {
+  const an = loadIndexed('analysis', source);
+  if (!an) return null;
+  const tr = loadIndex()[normKey(source)];
+  const same = (a, b) => a && b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+  return tr && an.transcript && !same(an.transcript, tr) ? null : an;
+}
+
 async function transcribe(source, opts = {}, extra) {
+  source = originalMedia(source);
   if (!fs.existsSync(source)) throw new Error('Soubor neexistuje: ' + source);
   const r = await runJob(
     'transcribe',
@@ -346,6 +435,7 @@ function rememberTranscript(source, file) {
 }
 
 function loadTranscript(source) {
+  source = originalMedia(source);
   const file = loadIndex()[normKey(source)];
   if (!file || !fs.existsSync(file)) {
     throw new Error(`Pro ${source} ještě neexistuje přepis. Nejdřív zavolej transcribe_media.`);
@@ -365,13 +455,95 @@ function tc(sec) {
 const segLine = (s, offset = 0) =>
   `#${s.id} ${tc(s.start + offset)}–${tc(s.end + offset)}${s.speaker ? ` [${s.speaker}]` : ''} ${s.text}`;
 
+// Rozdělí text na části v poměru vah (na hranicích slov, radši za interpunkcí, nikdy za „v“/„k“/„3.“).
+function splitByWeights(text, weights) {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (weights.length <= 1 || words.length <= 1) return [text];
+  const sum = weights.reduce((x, y) => x + y, 0);
+  const ends = [];
+  words.reduce((pos, w, i) => ((ends[i] = pos + w.length), pos + w.length + 1), 0);
+  const cuts = [];
+  let acc = 0;
+  let prev = 0;
+  for (let k = 0; k < weights.length - 1; k++) {
+    acc += weights[k];
+    const target = (text.length * acc) / sum;
+    let bi = prev;
+    let bc = Infinity;
+    for (let i = prev; i < words.length - 1; i++) {
+      const c = Math.abs(ends[i] - target) -
+        (/[,;:.!?…]["“”»]?$/.test(words[i]) && !/^\d+\.$/.test(words[i]) ? 12 : 0) +
+        (/^(\p{L}|\d+\.)$/u.test(words[i]) ? 1000 : 0) -
+        (/^(a|ale|i|nebo|když|že|protože|který|která|které|kde|než|aby|ani)$/i.test(words[i + 1] || '') ? 8 : 0);
+      if (c < bc) { bc = c; bi = i; }
+    }
+    cuts.push(Math.min(words.length, bi + 1));
+    prev = Math.min(words.length - 1, bi + 1);
+  }
+  const parts = [];
+  cuts.concat(words.length).reduce((from, to) => (parts.push(words.slice(from, Math.max(from, to)).join(' ')), Math.max(from, to)), 0);
+  return parts;
+}
+
+// Zalomí text do co nejmenšího počtu titulků ≤ limit znaků, vyrovnaně (ne „plný + jedno slovo“),
+// radši za interpunkcí, nikdy za jednopísmenným slovem nebo řadovou číslovkou.
+function reflowCue(text, limit) {
+  const words = text.split(/\s+/).filter(Boolean);
+  if (text.length <= limit || words.length < 2) return [words.join(' ')];
+  const W = words.length;
+  const len = (i, j) => words.slice(i, j).join(' ').length;
+  for (let n = Math.ceil(text.length / limit); n <= W; n++) {
+    const target = text.length / n;
+    // dp[k][j] = nejlepší cena k částí pokrývajících words[0..j)
+    const dp = Array.from({ length: n + 1 }, () => new Array(W + 1).fill(Infinity));
+    const from = Array.from({ length: n + 1 }, () => new Array(W + 1).fill(-1));
+    dp[0][0] = 0;
+    for (let k = 1; k <= n; k++) {
+      for (let j = k; j <= W; j++) {
+        for (let i = k - 1; i < j; i++) {
+          if (dp[k - 1][i] === Infinity) continue;
+          const l = len(i, j);
+          if (l > limit && j - i > 1) continue;
+          const last = words[j - 1];
+          const pen = j === W ? 0
+            : (/^(\p{L}|\d+\.)$/u.test(last) ? 500 : 0) - (/[,;:.!?…]["“”»]?$/.test(last) && !/^\d+\.$/.test(last) ? 20 : 0);
+          const c = dp[k - 1][i] + (l - target) ** 2 / 10 + pen;
+          if (c < dp[k][j]) { dp[k][j] = c; from[k][j] = i; }
+        }
+      }
+    }
+    if (dp[n][W] === Infinity) continue;
+    const parts = [];
+    for (let k = n, j = W; k > 0; k--) { const i = from[k][j]; parts.unshift(words.slice(i, j).join(' ')); j = i; }
+    return parts;
+  }
+  return words;
+}
+
 function wrapCue(text, charsPerLine, lineCount) {
   const words = text.split(/\s+/).filter(Boolean);
+  // dvouřádkový titulek: zlom vyvážený (ne „plný první řádek + jedno slovo“), radši za interpunkcí a nikdy za
+  // jednopísmennou předložkou/spojkou (čeština: „v“, „s“, „k“, „o“, „a“, „i“… nezůstávají na konci řádku)
+  if (lineCount === 2 && text.length > charsPerLine && words.length > 1) {
+    let best = null;
+    for (let i = 1; i < words.length; i++) {
+      const l1 = words.slice(0, i).join(' ');
+      const l2 = words.slice(i).join(' ');
+      const cost =
+        Math.max(l1.length, l2.length) +
+        (Math.max(l1.length, l2.length) > charsPerLine ? 1000 : 0) +
+        (/^(\p{L}|\d+\.)$/u.test(words[i - 1]) ? 60 : 0) -
+        (/[,;:.!?…]$/.test(words[i - 1]) && !/^\d+\.$/.test(words[i - 1]) ? 8 : 0);
+      if (!best || cost < best.cost) best = { cost, l1, l2 };
+    }
+    return `${best.l1}\n${best.l2}`;
+  }
   const lines = [];
   let cur = '';
   for (const w of words) {
     const t = cur ? `${cur} ${w}` : w;
-    if (cur && t.length > charsPerLine && lines.length < lineCount - 1) {
+    const single = /(^|\s)[\p{L}]$/u.test(cur); // nezalamovat hned za jednopísmenným slovem
+    if (cur && t.length > charsPerLine && lines.length < lineCount - 1 && !single) {
       lines.push(cur);
       cur = w;
     } else {
@@ -449,6 +621,42 @@ function mergeRanges(ranges, mergeGap) {
   return merged;
 }
 
+/** Návrh lokálního modelu jako krátký text ke kontrole agentem: vybrané věty s texty + náhradníci. */
+function reviewText(plan, tr, targetSec) {
+  const byId = new Map(tr.segments.map((s) => [s.id, s]));
+  // ↳ = pokračování předchozí věty (začíná malým písmenem) – souvětí se nesmí rozdělit
+  const line = (i) => {
+    const s = byId.get(i);
+    if (!s) return `#${i} ?`;
+    const cont = /^\p{Ll}/u.test(s.text.trim()) ? '↳ ' : '';
+    return `${cont}#${i} [${s.speaker || '?'}] ${(s.end - s.start).toFixed(1)}s ${s.text.trim()}`;
+  };
+  const alt = (plan.alternates || plan.dropped || []).filter((i) => !plan.picks.includes(i)).slice(0, 15);
+  const out = [
+    `Návrh (${plan.backend || 'lokální model'}): ${plan.picks.length} vět, ${plan.estimatedSec} s${targetSec ? ` (cíl ${targetSec} s)` : ''}.` +
+      (plan.note ? ` ${plan.note}` : ''),
+    ...(plan.thesis ? [`Teze (co má střih divákovi předat): ${plan.thesis}`] : []),
+    plan.editorial?.length
+      ? 'VYBRÁNO – redakčně složeno jako celek (vstup → jádro → pointa na konci), v pořadí střihu:'
+      : 'VYBRÁNO (v pořadí střihu):',
+    ...plan.picks.map(line),
+  ];
+  if (alt.length) out.push('NÁHRADNÍCI (k tématu, vyřazeno kvůli délce):', ...alt.map(line));
+  const auto = [];
+  if (plan.removedModerator?.length) auto.push(`moderátor ${plan.removedModerator.map((i) => '#' + i).join(',')}`);
+  if (plan.offTopic?.length) auto.push(`mimo téma ${plan.offTopic.map((i) => '#' + i).join(',')}`);
+  if (auto.length) out.push(`Automaticky vyřazeno: ${auto.join('; ')}.`);
+  if (plan.editorial?.length) {
+    out.push('Návrh je složený jako celek: vstup a pointu (poslední věty) neměň bez vážné vady; opravuj jen ' +
+      'konkrétní chyby (postava promluví, aniž by byla uvedena; myšlenka se opakuje; věta nedává smysl bez kontextu) ' +
+      'a náhradu hledej mezi náhradníky. Nepřidávej povely, výkřiky ani repliky bez kontextu.');
+  }
+  out.push('Zkontroluj návaznost, zadání a vyváženost; případně vyměň věty za náhradníky nebo dohledej jiné ' +
+    '(get_transcript fromId/toId), pak build_sequence_from_transcript. Řádek s ↳ je pokračování předchozí věty ' +
+    '(jedno souvětí) – vyhazuj ho jen spolu s ní, jinak souvětí skončí uprostřed.');
+  return out.join('\n');
+}
+
 function picksToRanges(tr, picks, { padBefore, padAfter, mergeGap }) {
   const byId = new Map(tr.segments.map((s) => [s.id, s]));
   const words = allWords(tr);
@@ -501,7 +709,223 @@ function withExtras(ranges, source, extraAudio) {
   }));
 }
 
-async function buildAndReport(name, segments, gap, extraInfo) {
+/** detect_scene_cuts s cache (viz popis nástroje) – volá ho i kontrola hranic při lokální stavbě. */
+async function detectSceneCutsCached(a) {
+  // Detekce je pomalá (6 min zdroje přes 5 min) a pokaždé vytvoří dočasnou sekvenci – výsledek se ukládá do cache
+  // (soubor + velikost + čas změny + citlivost); kratší rozsah se vezme z delší uložené analýzy.
+  const st = fs.existsSync(a.source) ? fs.statSync(a.source) : null;
+  const dir = path.join(ROOT, 'cache', 'scenecuts');
+  const key = st && crypto.createHash('sha1')
+    .update(JSON.stringify([normKey(a.source), st.size, st.mtimeMs, a.sensitivity || 'LowSensitivity'])).digest('hex');
+  const file = key && path.join(dir, `${path.basename(a.source)}.${key.slice(0, 12)}.json`);
+  const ranges = a.ranges?.length ? a.ranges : null;
+  if (file && fs.existsSync(file)) {
+    const c = readJson(file);
+    const to = ranges ? Math.max(...ranges.map((r) => r.to)) : a.to ?? Infinity;
+    if (c.analyzed >= Math.min(to, c.duration ?? Infinity) - 0.05) {
+      const inside = (x) => (ranges ? ranges.some((r) => x >= r.from - 0.01 && x <= r.to + 0.01) : x <= to);
+      const cuts = c.cuts.filter(inside);
+      return { ...c, cuts, count: cuts.length, analyzed: ranges ? undefined : Math.min(c.analyzed, to), ranges: ranges || undefined, cached: true };
+    }
+  }
+  const res = await premiere('detectSceneCuts', { ...a, source: await premiereMedia(a.source) }, 900000);
+  // značky na zdroji se hromadí i z dřívějších běhů (i mimo teď analyzovaný rozsah) – bez duplicit a jen do rozsahu
+  res.cuts = [...new Set(res.cuts)].filter((x) => ranges || x <= res.analyzed + 0.05).sort((x, y) => x - y);
+  res.count = res.cuts.length;
+  if (file && !ranges) { // okna nejsou analýza od začátku – do cache nepatří
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ ...res, duration: a.to === undefined ? res.analyzed : undefined }), 'utf8');
+  }
+  return res;
+}
+
+/** Repliky (titulky) z AKTUÁLNÍHO stavu sekvence: slova z přepisů zdrojů namapovaná na časy timeline, seskupená
+ *  podle délky, pauz, střihů a konců vět (s převažujícím mluvčím). */
+async function timelineCues(seq, a, extra) {
+  // starší dabing (cache/dub, funkce odstraněna) není původní řeč – v projektech ještě může ležet
+  const isDub = (c) => /[\\/]cache[\\/]dub[\\/]/i.test(c.mediaPath || '');
+  let clips = seq.clips.filter((c) => c.kind === 'audio' && c.mediaPath && !c.disabled && !isDub(c));
+  if (a.audioTracks) clips = clips.filter((c) => a.audioTracks.includes(c.track));
+  if (!clips.length) clips = seq.clips.filter((c) => c.kind === 'video' && c.mediaPath && !c.disabled);
+  const seen = new Set();
+  clips = clips.filter((c) => {
+    const k = `${c.mediaPath}|${c.start}|${c.inPoint}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (!clips.length) throw new Error('Sekvence nemá žádné klipy se zvukem/řečí.');
+  const sources = [...new Set(clips.map((c) => c.mediaPath))];
+  const transcripts = {};
+  // jen jazyk – ne celé `a`: `force` u titulků znamená „přidat další titulkovou stopu“, v přepisu by spustil nový
+  // přepis celého videa ve výchozí češtině (anglický film Whisper „přeložil“ a index přepnul na něj)
+  for (const src of sources) transcripts[src] = (await transcribe(src, { language: a.language }, extra)).data;
+
+  const words = [];
+  clips.forEach((c, ci) => {
+    const tr = transcripts[c.mediaPath];
+    const speed = c.speed || 1;
+    const map = (t) => c.start + (t - c.inPoint) / speed;
+    for (const s of tr.segments) {
+      for (const w of s.words || []) {
+        // clip = ze kterého klipu na timeline slovo pochází; titulek se na střihu musí zalomit,
+        // jinak by jeden titulek mísil text ze dvou různých míst zdroje (viz split níž).
+        if (w.s >= c.inPoint - 0.01 && w.e <= c.outPoint + 0.01) words.push({ t0: map(w.s), t1: map(w.e), text: w.w, clip: ci, spk: w.spk });
+      }
+    }
+  });
+  words.sort((x, y) => x.t0 - y.t0);
+  if (!words.length) throw new Error('V sekvenci nejsou žádná rozpoznaná slova k titulkování.');
+
+  const charsPerLine = a.charsPerLine || 40;
+  const lineCount = a.lines === 1 ? 1 : 2;
+  const maxChars = charsPerLine * lineCount;
+  const maxSec = a.maxSecPerCue || 6;
+  const gapSplit = 0.6;
+  const cues = [];
+  const make = (ws) => {
+    const spk = {};
+    for (const x of ws) spk[x.spk || '_'] = (spk[x.spk || '_'] || 0) + (x.t1 - x.t0);
+    return { t0: ws[0].t0, t1: ws.at(-1).t1, text: ws.map((x) => x.text).join(' '), clip: ws[0].clip, spk, ws };
+  };
+  let cur = null;
+  for (const w of words) {
+    const text = cur ? `${cur.text} ${w.text}` : w.text;
+    const gapTooBig = cur && w.t0 - cur.t1 > gapSplit;
+    // rezerva: řádky se lámou jen mezi slovy, 2 × 40 znaků se do dvou řádků nevejde skoro nikdy
+    const tooLong = cur && (text.length > maxChars - 4 * lineCount || w.t1 - cur.t0 > maxSec);
+    // Na střihu se titulek vždy zalomí: u těsných střihů (což je po ladění hranic běžné) mezi
+    // posledním slovem jednoho klipu a prvním slovem dalšího prakticky není mezera, takže by
+    // gapTooBig nezabral a jeden titulek by ukazoval text ze dvou nesouvisejících pasáží.
+    const clipChanged = cur && w.clip !== cur.clip;
+    // titulek končí s větou, když už má rozumnou délku – jinak "…války. Ruské / síly jsou…" (u překladu
+    // se pak překládá utržená půlka věty)
+    const sentenceEnded = cur && /[.!?…]$/.test(cur.text) && cur.t1 - cur.t0 >= 1.2;
+    if (!cur || gapTooBig || tooLong || clipChanged || sentenceEnded) {
+      let carry = [];
+      if (cur && tooLong && !gapTooBig && !clipChanged && !sentenceEnded) {
+        // plný titulek: radši rozdělit za čárkou v posledních slovech; jednopísmenná předložka/spojka
+        // („v“, „s“, „a“) na konci titulku nezůstane – přejde do dalšího
+        const ws = cur.ws;
+        let j = ws.length;
+        for (let k = ws.length - 1; k >= Math.max(1, ws.length - 5); k--) {
+          // …ale jen když první část zůstane aspoň z půlky plná (jinak u krátkých řádků vznikají 0,5s titulky „sami,“)
+          if (/[,;:]$/.test(ws[k - 1].text) && ws.slice(0, k).map((x) => x.text).join(' ').length >= (maxChars - 4 * lineCount) / 2) { j = k; break; }
+        }
+        if (j === ws.length && ws.length > 1 && /^\p{L}$/u.test(ws.at(-1).text)) j = ws.length - 1;
+        carry = ws.slice(j);
+        cur = make(ws.slice(0, j));
+      }
+      if (cur) cues.push(cur);
+      cur = make([...carry, w]);
+    } else {
+      cur = make([...cur.ws, w]);
+    }
+  }
+  if (cur) cues.push(cur);
+  // osiřelý konec věty („myslet.“ samotné na titulku) si vezme poslední slova předchozího titulku – od čárky
+  // nebo spojky, jinak poslední dvě
+  for (let i = 1; i < cues.length; i++) {
+    const c = cues[i];
+    const p = cues[i - 1];
+    if (c.text.length >= 12 || c.clip !== p.clip || c.t0 - p.t1 > 0.3 || p.ws.length < 5) continue;
+    let j = p.ws.length - 2;
+    for (let k = p.ws.length - 1; k >= Math.max(1, p.ws.length - 5); k--) {
+      if (/[,;:]$/.test(p.ws[k - 1].text) || /^(a|ale|i|nebo|když|že|protože|který|která|které|aby)$/i.test(p.ws[k].text)) { j = k; break; }
+    }
+    if (j > 1 && /^\p{L}$/u.test(p.ws[j - 1].text)) j--; // „…republice a / že je“ → „a“ jde s dalším
+    cues[i] = make([...p.ws.slice(j), ...c.ws]);
+    cues[i - 1] = make(p.ws.slice(0, j));
+  }
+  // krátký nedokončený útržek před pauzou („Russian“ … 2,4 s … „forces are dug in.“) se spojí s pokračováním
+  for (let i = cues.length - 2; i >= 0; i--) {
+    const c = cues[i];
+    const n = cues[i + 1];
+    if (c.text.length >= 12 || /[.!?…]$/.test(c.text) || n.clip !== c.clip || n.t0 - c.t1 > 3) continue;
+    if (c.text.length + n.text.length + 1 > maxChars - 4 * lineCount) continue;
+    cues.splice(i, 2, make([...c.ws, ...n.ws]));
+  }
+  for (const c of cues) { c.speaker = Object.entries(c.spk).sort((x, y) => y[1] - x[1])[0]?.[0]; delete c.ws; }
+  return { cues, clips, transcripts, charsPerLine, lineCount };
+}
+
+/** Hranice klipů vs. skryté střihy obrazu (grafika, jiný záběr) ve zdroji: střih do 1,5 s uvnitř klipu = obraz
+ *  na začátku/konci jen bleskne. Když mezi hranicí a střihem není řeč, hranice se na střih přesune (slovo se tím
+ *  nikdy neuřízne); jinak zůstane a vrátí se upozornění. Detekce jen v oknech kolem hranic (celý zdroj je pomalý). */
+async function snapToSceneCuts(source, tr, ranges) {
+  const words = allWords(tr);
+  const end = tr.duration || Infinity; // okna nesmí přesáhnout konec zdroje (host ho u znovu použité sekvence nezná)
+  const wins = ranges
+    .flatMap((r) => [{ from: Math.max(0, r.in - 0.3), to: Math.min(end, r.in + 1.6) },
+      { from: Math.max(0, r.out - 1.6), to: Math.min(end, r.out + 0.3) }])
+    .sort((x, y) => x.from - y.from)
+    .reduce((acc, w) => {
+      const last = acc.at(-1);
+      if (last && w.from <= last.to) last.to = Math.max(last.to, w.to);
+      else acc.push({ ...w });
+      return acc;
+    }, []);
+  let cuts;
+  try {
+    cuts = (await detectSceneCutsCached({ source, ranges: wins })).cuts;
+  } catch (e) {
+    return [`kontrola střihů obrazu selhala: ${e.message}`];
+  }
+  const speech = (x, y) => words.some((w) => w.e > x + 0.02 && w.s < y - 0.02);
+  const notes = [];
+  for (const r of ranges) {
+    const sc = cuts.find((c) => c > r.in + 0.04 && c <= r.in + 1.5);
+    if (sc !== undefined) {
+      if (!speech(r.in, sc)) {
+        notes.push(`začátek ${tc(r.in)} posunut na střih obrazu ${tc(sc)}`);
+        r.in = sc;
+      } else notes.push(`⚠ ${tc(r.in)}: střih obrazu ${(sc - r.in).toFixed(2)} s po začátku klipu, uvnitř řeči – obraz jen bleskne`);
+    }
+    const ec = [...cuts].reverse().find((c) => c < r.out - 0.04 && c >= r.out - 1.5);
+    if (ec !== undefined) {
+      if (!speech(ec, r.out)) {
+        notes.push(`konec ${tc(r.out)} posunut na střih obrazu ${tc(ec)}`);
+        r.out = ec;
+      } else notes.push(`⚠ ${tc(r.out)}: střih obrazu ${(r.out - ec).toFixed(2)} s před koncem klipu, uvnitř řeči – obraz jen bleskne`);
+    }
+  }
+  return notes;
+}
+
+/** Výběr celých vět, který rozdělí souvětí (další věta téhož mluvčího začíná malým písmenem) – agent se to
+ *  dozví hned a může to opravit, místo aby odevzdal střih s větou utnutou uprostřed. */
+function continuityWarnings(tr, picks) {
+  const byId = new Map(tr.segments.map((s) => [s.id, s]));
+  const ids = new Set(picks.map((p) => (typeof p === 'number' ? p : p.id)));
+  const low = (s) => /^\p{Ll}/u.test((s?.text || '').trim());
+  const out = [];
+  for (const p of picks) {
+    if (typeof p !== 'number' && (p.fromWord !== undefined || p.toWord !== undefined)) continue; // záměrné zkrácení
+    const id = typeof p === 'number' ? p : p.id;
+    const s = byId.get(id);
+    const next = byId.get(id + 1);
+    const prev = byId.get(id - 1);
+    if (!s) continue;
+    if (next && low(next) && next.speaker === s.speaker && !ids.has(id + 1)) {
+      out.push(`#${id} pokračuje větou #${id + 1} („${next.text.trim().slice(0, 40)}…“), která ve střihu chybí – souvětí skončí uprostřed`);
+    }
+    if (low(s) && prev && prev.speaker === s.speaker && !ids.has(id - 1)) {
+      out.push(`#${id} začíná uprostřed souvětí – chybí #${id - 1}`);
+    }
+  }
+  return out.length ? out : undefined;
+}
+
+async function buildAndReport(name, segments, gap, extraInfo, extra) {
+  const conv = new Map();
+  const safe = async (p) => {
+    if (!conv.has(p)) conv.set(p, await premiereMedia(p, extra));
+    return conv.get(p);
+  };
+  for (const s of segments) {
+    s.source = await safe(s.source);
+    for (const x of s.extra || []) x.source = await safe(x.source);
+  }
   const res = await premiere('buildSequence', { name, segments, gap }, 600000);
   return {
     ...res,
@@ -518,15 +942,17 @@ const server = new McpServer(
   {
     instructions: [
       'Nástroje pro střih v Adobe Premiere Pro (čeština). Časy jsou vždy v sekundách.',
-      'Postup: 1) premiere_status/get_project, 2) get_sequence pro zdrojové soubory a klipy,',
-      '3) transcribe_media (nebo transcribe_sequence) – přepis s ID vět, 4) přečti přepis celý (get_transcript),',
-      '5) vyber věty tak, aby výsledek dával smysl (celé myšlenky, žádné utnuté věty, bez přeřeknutí a opakování),',
-      '6) build_sequence_from_transcript vytvoří NOVOU sekvenci – původní střih zůstává netknutý.',
+      'Postup: 1) zdroj ze zadání (jinak get_sequence/list_project_items), 2) transcribe_media – přepis s ID vět',
+      '(u dlouhého vrátí jen začátek), 3) sestřih podle obsahu: plan_edit_local s format "review" (lokální model navrhne',
+      'věty i náhradníky, instruction = zadání doslova) a návrh zkontroluj; u krátkého materiálu nebo úzkého tématu čti',
+      'jen potřebné úseky (search_transcript, get_transcript fromId/toId). Výběr: celé myšlenky, žádné utnuté věty',
+      '(řádek s ↳ = pokračování předchozí věty), bez přeřeknutí a opakování.',
+      '4) build_sequence_from_transcript vytvoří NOVOU sekvenci – původní střih zůstává netknutý.',
       'Destruktivní úpravy (remove_timeline_ranges, remove_clips) používej jen na výslovné přání.',
       'Když má každý mluvčí vlastní mikrofon, předej speakerTracks – přepis pak obsahuje [jméno].',
       'Bez oddělených mikrofonů použij diarize_media a pojmenuj mluvčí přes rename_speakers.',
       'DLOUHÝ MATERIÁL (šetři tokeny): analyze_transcript vrátí kompaktní osnovu kapitol (lokální LLM, zdarma);',
-      'plný text čti jen u vybraných kapitol přes get_transcript s format "compact". plan_edit_local navrhne střih úplně lokálně.',
+      'plný text čti jen u vybraných kapitol přes get_transcript s format "compact".',
       'VÍCE KAMER: build_multicam_sequence – synchronizuje kamery podle zvuku a přepíná podle mluvčího (nejdřív dryRun).',
       'Dlouhé úlohy běží v lokálním Workeru; worker_status ukazuje frontu.',
     ].join(' '),
@@ -536,8 +962,12 @@ const server = new McpServer(
 function tool(name, description, shape, handler) {
   server.registerTool(name, { description, inputSchema: shape }, async (args, extra) => {
     try {
+      for (const k of ['path', 'source']) {
+        if (typeof args?.[k] === 'string' && /\.(mp4|mov|mxf|mkv|avi|wav|mp3|m4a|aac|flac)$/i.test(args[k])) lastSource = args[k];
+      }
       const r = await handler(args, extra);
-      return { content: [{ type: 'text', text: typeof r === 'string' ? r : JSON.stringify(r, null, 2) }] };
+      // kompaktní JSON: odsazení mezerami agent platí v tokenech u každého výsledku, číst to umí stejně
+      return { content: [{ type: 'text', text: typeof r === 'string' ? r : JSON.stringify(r) }] };
     } catch (e) {
       return { isError: true, content: [{ type: 'text', text: String(e?.message || e) }] };
     }
@@ -604,8 +1034,18 @@ tool(
 tool(
   'import_media',
   'Importuje soubory do projektu.',
-  { paths: z.array(z.string()), bin: z.string().optional().describe('Název binu (vytvoří se)') },
-  ({ paths, bin }) => premiere('importFiles', { paths, bin }, 300000),
+  {
+    paths: z.array(z.string()),
+    bin: z.string().optional().describe('Název binu (vytvoří se)'),
+    openSequence: z.boolean().optional().describe('Z každého videa vytvořit sekvenci (nastavení podle klipu) a otevřít ji na timeline'),
+  },
+  async ({ paths, bin, openSequence }, extra) => {
+    const safe = [];
+    for (const p of paths) safe.push(await premiereMedia(p, extra));
+    const res = await premiere('importFiles', { paths: safe, bin, openSequence }, 300000);
+    const conv = paths.filter((p, i) => safe[i] !== p);
+    return conv.length ? { ...res, converted: paths.map((p, i) => safe[i] !== p && `${path.basename(p)} → ${safe[i]}`).filter(Boolean) } : res;
+  },
 );
 
 tool(
@@ -626,10 +1066,14 @@ tool(
     path: z.string().optional().describe('Cesta k videu/zvuku; bez zadání použije jediné video/zvuk v projektu (je-li jen jedno)'),
     language: z.string().optional().describe('Kód jazyka, výchozí "cs"; prázdný řetězec = autodetekce'),
     model: z.string().optional().describe('Whisper model (large-v3, large-v3-turbo, medium…)'),
-    prompt: z.string().optional().describe('Kontext pro přepis: jména, značky, odborné termíny'),
+    prompt: z.string().optional().describe('Kontext pro NOVÝ přepis: jména, značky, termíny. Existující přepis se kvůli němu znovu nedělá – na to force: true (celé video znovu, změní číslování vět).'),
     speakerTracks,
     force: z.boolean().optional().describe('Ignorovat cache a přepsat znovu'),
-    maxChars: z.number().int().optional().describe('Max. délka vráceného textu (výchozí 20000)'),
+    maxChars: z
+      .number()
+      .int()
+      .optional()
+      .describe('Max. délka vráceného textu (výchozí: krátký přepis celý, dlouhý jen začátek – zbytek get_transcript)'),
   },
   async (a, extra) => {
     const p = a.path || (await singleProjectMediaSource());
@@ -642,7 +1086,15 @@ tool(
       `Soubor: ${file}`,
       '',
     ].filter((x) => x !== null);
-    return head.join('\n') + paginate(data.segments.map((s) => segLine(s)), a.maxChars || 20000);
+    const lines = data.segments.map((s) => segLine(s));
+    // dlouhý přepis celý do odpovědi = tisíce tokenů, které agent v každém dalším kroku čte znovu, i když
+    // pak stejně hledá (search_transcript) nebo čte jen kapitolu – vrať začátek a cestu k dalšímu čtení
+    const total = lines.reduce((acc, l) => acc + l.length + 1, 0);
+    if (!a.maxChars && total > 8000) {
+      return head.join('\n') + paginate(lines, 2500) +
+        '\nDalší čtení: get_outline (osnova kapitol), search_transcript (hledání), get_transcript fromId/toId format "compact".';
+    }
+    return head.join('\n') + paginate(lines, a.maxChars || 20000);
   },
 );
 
@@ -683,7 +1135,8 @@ tool(
 tool(
   'search_transcript',
   'Najde v přepisu věty obsahující text jako celé slovo/frázi na hranicích slov (bez ohledu na diakritiku a velikost písmen). ' +
-    'Hledání "já" tedy nenajde "jaký" ani "jazyk" – jen samostatné slovo "já".',
+    'Hledání "já" tedy nenajde "jaký" ani "jazyk" – jen samostatné slovo "já". Když přesný tvar nenajde, zkusí kmen ' +
+    'slova (skloňování: "Pavlovičky" najde "Pavloviček").',
   {
     path: z.string().optional().describe('Cesta k videu; bez zadání použije jediný existující přepis (je-li jen jeden)'),
     query: z.string(),
@@ -695,15 +1148,32 @@ tool(
     const tr = loadTranscript(p);
     const q = stripDiacritics(query).trim();
     if (!q) throw new Error('Prázdný dotaz.');
-    const re = new RegExp(`\\b${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-    const hits = new Set();
-    tr.segments.forEach((s, i) => {
-      if (re.test(stripDiacritics(s.text))) {
-        for (let k = Math.max(0, i - context); k <= Math.min(tr.segments.length - 1, i + context); k++) hits.add(k);
-      }
-    });
-    if (!hits.size) return `„${query}“ v přepisu nenalezeno.`;
-    return [...hits].sort((x, y) => x - y).map((i) => segLine(tr.segments[i])).join('\n');
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const find = (re) => {
+      const hits = new Set();
+      tr.segments.forEach((s, i) => {
+        if (re.test(stripDiacritics(s.text))) {
+          for (let k = Math.max(0, i - context); k <= Math.min(tr.segments.length - 1, i + context); k++) hits.add(k);
+        }
+      });
+      return hits;
+    };
+    // hranice slov unicodově – \b a \w v JS znají jen ASCII, na azbuce (film v ruštině) hledání nenašlo nic
+    const B = '(?<![\\p{L}\\p{N}])';
+    const E = '(?![\\p{L}\\p{N}])';
+    let hits = find(new RegExp(`${B}${esc(q)}${E}`, 'u'));
+    let note = '';
+    if (!hits.size) {
+      // čeština skloňuje: "Pavlovičky" je v přepisu jako "Pavloviček" – zkus kmen (delší slova bez posledních 2 písmen)
+      const stem = q
+        .split(/\s+/)
+        .map((w) => (w.length >= 5 ? `${esc(w.slice(0, Math.max(4, w.length - 2)))}[\\p{L}\\p{N}]*` : esc(w)))
+        .join('\\s+');
+      hits = find(new RegExp(`${B}${stem}${E}`, 'u'));
+      if (hits.size) note = '(přesný tvar nenalezen, hledáno podle kmene slova)\n';
+    }
+    if (!hits.size) return `„${query}“ v přepisu nenalezeno (ani podle kmene slova).`;
+    return note + [...hits].sort((x, y) => x - y).map((i) => segLine(tr.segments[i])).join('\n');
   },
 );
 
@@ -796,7 +1266,7 @@ function contentFingerprint(seq) {
 
 tool(
   'add_captions',
-  'Vygeneruje české titulky z přepisu podle AKTUÁLNÍHO stavu sekvence (co je teď na timeline) a přidá je do Premiery ' +
+  'Vygeneruje titulky z přepisu (s translate: "cs" rovnou přeložené do češtiny) podle AKTUÁLNÍHO stavu sekvence (co je teď na timeline) a přidá je do Premiery ' +
     'jako nativní titulkovou stopu (import .srt + titulková stopa v sekvenci, vidět v Program monitoru). ' +
     'Spustit až po hotovém střihu – při dalším střihání by se časy titulků a obrazu rozjely. ' +
     'POZOR: Premiera umí zobrazit jen úplně PRVNÍ titulkovou stopu vytvořenou v sekvenci – další přidaná by byla neviditelná. ' +
@@ -809,6 +1279,10 @@ tool(
     charsPerLine: z.number().int().optional().describe('Max znaků na jeden řádek titulku (výchozí 40)'),
     lines: z.union([z.literal(1), z.literal(2)]).optional().describe('Počet řádků titulku: 1 nebo 2 (výchozí 2)'),
     maxSecPerCue: z.number().optional().describe('Max délka jednoho titulku v s (výchozí 6)'),
+    translate: z
+      .string()
+      .optional()
+      .describe('Přeložit titulky do jazyka (např. "cs") lokálním modelem – řeč může být v jakémkoli jazyce i jejich mixu'),
     leadIn: z
       .number()
       .optional()
@@ -831,65 +1305,87 @@ tool(
           'Pokud víš, co děláš, můžeš to obejít parametrem force: true (výsledek ale nebude v Premiere vidět, dokud staré stopy nesmažeš).',
       );
     }
-    let clips = seq.clips.filter((c) => c.kind === 'audio' && c.mediaPath && !c.disabled);
-    if (a.audioTracks) clips = clips.filter((c) => a.audioTracks.includes(c.track));
-    if (!clips.length) clips = seq.clips.filter((c) => c.kind === 'video' && c.mediaPath && !c.disabled);
-    const seen = new Set();
-    clips = clips.filter((c) => {
-      const k = `${c.mediaPath}|${c.start}|${c.inPoint}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-    if (!clips.length) throw new Error('Sekvence nemá žádné klipy se zvukem/řečí.');
-    const sources = [...new Set(clips.map((c) => c.mediaPath))];
-    const transcripts = {};
-    for (const src of sources) transcripts[src] = (await transcribe(src, a, extra)).data;
+    const { cues, clips, charsPerLine, lineCount } = await timelineCues(seq, a, extra);
 
-    const words = [];
-    clips.forEach((c, ci) => {
-      const tr = transcripts[c.mediaPath];
-      const speed = c.speed || 1;
-      const map = (t) => c.start + (t - c.inPoint) / speed;
-      for (const s of tr.segments) {
-        for (const w of s.words || []) {
-          // clip = ze kterého klipu na timeline slovo pochází; titulek se na střihu musí zalomit,
-          // jinak by jeden titulek mísil text ze dvou různých míst zdroje (viz split níž).
-          if (w.s >= c.inPoint - 0.01 && w.e <= c.outPoint + 0.01) words.push({ t0: map(w.s), t1: map(w.e), text: w.w, clip: ci });
+    // překlad (lokální model, zdarma): časy zůstávají z původní řeči, zalomí se až přeložený text
+    let translated = null;
+    if (a.translate) {
+      // Titulek se na střihu láme i uprostřed věty („…války. Ruské“ / „síly jsou…“). Útržky jedné věty se proto
+      // přeloží dohromady a překlad se rozdělí zpět do stejných titulků podle jejich délky (na hranicích slov) –
+      // časy i zalomení na střihu zůstanou, překládá se ale celá věta.
+      const groups = [];
+      for (const c of cues) {
+        const g = groups.at(-1);
+        const last = g && g.at(-1);
+        if (last && !/[.!?…]["“”»]?$/.test(last.text.trim()) && c.t0 - last.t1 < 5 && g.length < 10) g.push(c);
+        else groups.push([c]);
+      }
+      // limit znaků na skupinu: kolik se stihne přečíst za dobu řeči (17 znaků/s). U rychlé řeči je to MÉNĚ než
+      // originál a překlad se musí zhustit, jak to dělá titulkář – dřív byl limit nejmíň délka originálu a
+      // „You get jailed like Khodorkovsky…“ (93 znaků za 4 s) dalo 7 titulků po 0,5 s, které nešly přečíst.
+      // Nejmíň 60 % originálu, aby zhuštění nepolykalo smysl.
+      const maxLen = groups.map((g) => {
+        const src = g.map((c) => c.text.trim()).join(' ').length;
+        const secs = g.reduce((s, c) => s + (c.t1 - c.t0), 0) + 0.5 * (g.length - 1);
+        return Math.round(Math.max(0.6 * src, secs * 17));
+      });
+      const t = await runJob('translate', { texts: groups.map((g) => g.map((c) => c.text.trim()).join(' ')), maxLen, target: a.translate }, extra);
+      // Překlad se nerozkládá do původních (anglických) titulků – ty jsou při krátkém řádku jen 1–3 slova
+      // a zlomek sekundy, takže by česky blikaly útržky „že“, „asi“ a délky řádků by nesedly. Místo toho:
+      // skupina se rozdělí na bloky po klipech (přes střih titulek nikdy nejde), překlad se mezi bloky
+      // rozdělí podle délky originálu a každý blok se znovu zalomí do titulků ≤ limit znaků. Časy se
+      // rozpočítají podle znaků přes úseky, kdy v bloku skutečně zněla řeč (pauzy se přeskočí).
+      const limit = charsPerLine * lineCount;
+      const out = [];
+      groups.forEach((g, gi) => {
+        const blocks = [];
+        for (const c of g) {
+          const b = blocks.at(-1);
+          if (b && b.clip === c.clip) { b.spans.push([c.t0, c.t1]); b.text += ` ${c.text.trim()}`; }
+          else blocks.push({ clip: c.clip, speaker: c.speaker, spans: [[c.t0, c.t1]], text: c.text.trim() });
         }
-      }
-    });
-    words.sort((x, y) => x.t0 - y.t0);
-    if (!words.length) throw new Error('V sekvenci nejsou žádná rozpoznaná slova k titulkování.');
-
-    const charsPerLine = a.charsPerLine || 40;
-    const lineCount = a.lines === 1 ? 1 : 2;
-    const maxChars = charsPerLine * lineCount;
-    const maxSec = a.maxSecPerCue || 6;
-    const gapSplit = 0.6;
-    const cues = [];
-    let cur = null;
-    for (const w of words) {
-      const text = cur ? `${cur.text} ${w.text}` : w.text;
-      const gapTooBig = cur && w.t0 - cur.t1 > gapSplit;
-      const tooLong = cur && (text.length > maxChars || w.t1 - cur.t0 > maxSec);
-      // Na střihu se titulek vždy zalomí: u těsných střihů (což je po ladění hranic běžné) mezi
-      // posledním slovem jednoho klipu a prvním slovem dalšího prakticky není mezera, takže by
-      // gapTooBig nezabral a jeden titulek by ukazoval text ze dvou nesouvisejících pasáží.
-      const clipChanged = cur && w.clip !== cur.clip;
-      if (!cur || gapTooBig || tooLong || clipChanged) {
-        if (cur) cues.push(cur);
-        cur = { t0: w.t0, t1: w.t1, text: w.text, clip: w.clip };
-      } else {
-        cur.t1 = w.t1;
-        cur.text = text;
-      }
+        const text = (t.texts[gi] || '').trim();
+        if (text && blocks.length > 1) {
+          const parts = splitByWeights(text, blocks.map((b) => Math.max(1, b.text.length)));
+          blocks.forEach((b, k) => { b.text = parts[k] || ''; });
+        } else if (text) blocks[0].text = text;
+        for (const b of blocks) {
+          if (!b.text) continue;
+          const lines = reflowCue(b.text, limit);
+          const speech = b.spans.reduce((x, [s0, s1]) => x + Math.max(0, s1 - s0), 0);
+          const at = (frac) => { // podíl textu -> reálný čas přes úseky řeči
+            let left = frac * speech;
+            for (const [s0, s1] of b.spans) {
+              const d = Math.max(0, s1 - s0);
+              if (left <= d) return s0 + left;
+              left -= d;
+            }
+            return b.spans.at(-1)[1];
+          };
+          const L = b.text.length;
+          let pos = 0;
+          lines.forEach((ln) => {
+            const t0 = at(pos / L);
+            pos += ln.length + 1;
+            out.push({ t0, t1: at(Math.min(1, (pos - 1) / L)), text: ln, clip: b.clip, speaker: b.speaker });
+          });
+        }
+      });
+      cues.splice(0, cues.length, ...out);
+      translated = { target: a.translate, backend: t.backend };
     }
-    if (cur) cues.push(cur);
 
     // Whisper hlásí začátek slova po tichu typicky s malým zpožděním oproti skutečnému
     // začátku řeči (běžná vlastnost ASR zarovnání) – titulek proto předsadíme dopředu,
     // ale nikdy před konec předchozího titulku (aby se nepřekrývaly).
+    // titulek začínající malým písmenem po konci věty nebo na novém klipu (střih uprostřed věty) → velké písmeno
+    cues.forEach((c, i) => {
+      const p = cues[i - 1];
+      if (!p || /[.!?…]["“”»]?$/.test(p.text.trim()) || c.clip !== p.clip) {
+        c.text = c.text.trim().replace(/^\p{Ll}/u, (m) => m.toUpperCase());
+      }
+    });
+
     const leadIn = a.leadIn ?? 0.12;
     if (leadIn > 0) {
       let prevEnd = 0;
@@ -901,6 +1397,17 @@ tool(
         prevEnd = c.t1;
       }
     }
+    // titulek zmizí s koncem řeči – rychlý (> 17 znaků/s) nebo krátký (< 1 s) se prodlouží do ticha za ním, nejvýš
+    // o 1,5 s, po začátek dalšího titulku a konec vlastního klipu (přes střih obrazu nepřesahuje)
+    cues.forEach((c, i) => {
+      const len = c.text.trim().length;
+      const want = Math.max(1, len / 17);
+      const dur = c.t1 - c.t0;
+      if (dur >= want) return;
+      const next = cues[i + 1];
+      const clipEnd = clips[c.clip] ? clips[c.clip].end : Infinity;
+      c.t1 = Math.max(c.t1, Math.min(c.t0 + want, c.t1 + 1.5, next ? next.t0 - 0.04 : Infinity, clipEnd));
+    });
 
     const srtLines = [];
     cues.forEach((c, i) => {
@@ -908,13 +1415,14 @@ tool(
     });
     const dir = path.join(CACHE_DIR, 'captions');
     fs.mkdirSync(dir, { recursive: true });
-    const srtPath = path.join(dir, `${(seq.name || 'sequence').replace(/[^\w.-]+/g, '_')}.${seq.sequenceID.slice(0, 8)}.srt`);
+    const srtPath = path.join(dir, `${(seq.name || 'sequence').replace(/[^\w.-]+/g, '_')}.${seq.sequenceID.slice(0, 8)}${a.translate ? `.${a.translate}` : ''}.srt`);
     fs.writeFileSync(srtPath, srtLines.join('\n'), 'utf8');
 
     await premiere('addCaptions', { sequence: seq.sequenceID, srtPath });
     capIdx[seq.sequenceID] = { when: new Date().toISOString(), srt: srtPath, sequence: seq.name, fingerprint };
     saveCaptionsIndex(capIdx);
-    return { cues: cues.length, srt: srtPath, sequence: seq.name };
+    return { cues: cues.length, srt: srtPath, sequence: seq.name, translated: translated || undefined,
+      sample: cues.slice(0, 3).map((c) => c.text.trim()) };
   },
 );
 
@@ -924,6 +1432,7 @@ tool(
   {
     name: z.string().describe('Název nové sekvence'),
     source: z.string().optional().describe('Zdroj, který se vkládá na timeline (video); bez zadání použije jediný existující přepis (je-li jen jeden)'),
+    path: z.string().optional().describe('Totéž co source (ostatní nástroje používají path)'),
     transcriptSource: z
       .string()
       .optional()
@@ -942,9 +1451,14 @@ tool(
     mergeGap: z.number().optional().describe('Navazující úseky blíž než toto se spojí (výchozí 0.4)'),
     gap: z.number().optional().describe('Mezera mezi úseky na timeline v s (výchozí 0)'),
     extraAudio,
+    sceneCuts: z
+      .boolean()
+      .optional()
+      .describe('Krátké zpravodajské sestřihy: zkontroluj skryté střihy obrazu u hranic klipů a hranici na střih přichyť, když mezi nimi není řeč (jinak vrátí upozornění)'),
   },
   async (a, extra) => {
-    const source = a.source || singleTranscribedSource();
+    const source = a.source || a.path || singleTranscribedSource();
+    const guessed = !a.source && !a.path;
     if (!source) throw missingSourceError(Object.keys(loadIndex()));
     const tr = loadTranscript(a.transcriptSource || source);
     const ranges = picksToRanges(tr, a.picks, {
@@ -953,9 +1467,13 @@ tool(
       mergeGap: a.mergeGap ?? 0.4,
     });
     await refineOutPoints(a.transcriptSource || source, ranges, extra);
+    const sceneCuts = a.sceneCuts ? await snapToSceneCuts(source, tr, ranges) : undefined;
     const segments = withExtras(ranges, source, a.extraAudio);
     return buildAndReport(a.name, segments, a.gap ?? 0, {
+      source: guessed ? `${source} (zdroj nebyl zadán – vzat naposledy použitý; zkontroluj, že je to ten správný)` : undefined,
       ranges: ranges.map((r) => `${tc(r.in)}–${tc(r.out)} věty ${r.ids.join(',')}`),
+      continuity: continuityWarnings(tr, a.picks),
+      sceneCuts: sceneCuts?.length ? sceneCuts : undefined,
     });
   },
 );
@@ -966,13 +1484,15 @@ tool(
   {
     name: z.string(),
     source: z.string().optional().describe('Bez zadání použije jediný existující přepis (je-li jen jeden)'),
+    path: z.string().optional().describe('Totéž co source (ostatní nástroje používají path)'),
     transcriptSource: z.string().optional().describe('Soubor s přepisem, když řeč je v jiném souboru (výchozí = source)'),
     minPause: z.number().optional().describe('Pauza delší než toto se vystřihne (výchozí 0.7 s)'),
     pad: z.number().optional().describe('Odsazení kolem řeči (výchozí 0.15 s)'),
     extraAudio,
   },
   async (a, extra) => {
-    const source = a.source || singleTranscribedSource();
+    const source = a.source || a.path || singleTranscribedSource();
+    const guessed = !a.source && !a.path;
     if (!source) throw missingSourceError(Object.keys(loadIndex()));
     const tr = loadTranscript(a.transcriptSource || source);
     const ranges = mergeRanges(speechIslands(tr, a.minPause ?? 0.7, a.pad ?? 0.15), 0);
@@ -980,6 +1500,7 @@ tool(
     const kept = ranges.reduce((acc, r) => acc + r.out - r.in, 0);
     const segments = withExtras(ranges, source, a.extraAudio);
     return buildAndReport(a.name, segments, 0, {
+      source: guessed ? `${source} (zdroj nebyl zadán – vzat naposledy použitý; zkontroluj, že je to ten správný)` : undefined,
       original: tc(tr.duration),
       removed: tc(Math.max(0, tr.duration - kept)),
     });
@@ -1014,14 +1535,19 @@ tool(
   'Najde skutečné vizuální střihy kamer zapečené uvnitř JEDNOHO spojitého zdrojového souboru (Premierina Scene Edit Detection – ' +
     'pozná změnu obrazu, ne kdo mluví). Spustit jen na výslovné přání uživatele – vytvoří dočasnou pracovní sekvenci se zadaným ' +
     'zdrojem a rozsahem. U delšího úseku (přes ~5 min) to může trvat přes minutu, radši zvol kratší rozsah přes "to". ' +
-    'Vrací časy střihů VE ZDROJI (ne v timeline). Hodí se jako doplňkový signál ke zvukové diarizaci pro multicam, nebo na ' +
+    'Vrací časy střihů VE ZDROJI (ne v timeline); výsledek se ukládá, opakované volání je okamžité. Na kontrolu hranic ' +
+    'sestřihu stačí "to" = konec posledního použitého úseku + 5 s. Hodí se i jako doplňkový signál ke zvukové diarizaci pro multicam, nebo na ' +
     'nalezení skrytých řezů v jednom dlouhém záběru.',
   {
     source: z.string().describe('Cesta ke zdrojovému video souboru'),
     to: z.number().optional().describe('Do kolika sekund od začátku zdroje analyzovat (výchozí celý soubor – pozor, může být pomalé)'),
+    ranges: z
+      .array(z.object({ from: z.number(), to: z.number() }))
+      .optional()
+      .describe('Jen tyto úseky zdroje (s) – na kontrolu hranic sestřihu stačí okna ±3 s kolem začátku a konce každého klipu; mnohem rychlejší než celý soubor'),
     sensitivity: z.string().optional().describe('Citlivost detekce v Premiere, výchozí "LowSensitivity" (jediná ověřená hodnota)'),
   },
-  (a) => premiere('detectSceneCuts', a, 300000),
+  (a) => detectSceneCutsCached(a),
 );
 
 tool(
@@ -1130,8 +1656,8 @@ tool('reload_bridge', 'Znovu načte host.jsx v panelu (po úpravě kódu, bez re
 /* ------------------------------------------------------------------ Worker: mluvčí, synchronizace, porozumění, více kamer */
 
 function outlineText(source) {
-  const an = loadIndexed('analysis', source);
-  if (!an) throw new Error(`Pro ${source} ještě není analýza – zavolej analyze_transcript.`);
+  const an = loadAnalysis(source);
+  if (!an) throw new Error(`Pro ${source} ještě není analýza k aktuálnímu přepisu – zavolej analyze_transcript.`);
   const lines = [
     `Osnova: ${path.basename(source)} · ${tc(an.duration)} · ${an.sentences} vět${an.speakers?.length ? ` · mluvčí ${an.speakers.join(', ')}` : ''}${an.llm ? '' : ' · bez LLM'}`,
   ];
@@ -1200,9 +1726,27 @@ tool(
 );
 
 tool(
+  'list_voices',
+  'Vypíše knihovnu hlasů – lidi, které systém pozná podle barvy hlasu v každém dalším videu (ukládá se při rename_speakers).',
+  {},
+  (a, extra) => runJob('list_voices', {}, extra),
+);
+
+tool(
+  'forget_voice',
+  'Smaže uložený hlasový otisk z knihovny hlasů.',
+  { name: z.string().describe('Jméno, jak je v list_voices') },
+  (a, extra) => runJob('forget_voice', a, extra),
+);
+
+tool(
   'rename_speakers',
-  'Přejmenuje mluvčí (např. {"S1":"Petr","S2":"Moderátor"}) v přepisu i diarizaci.',
-  { path: z.string(), mapping: z.record(z.string(), z.string()) },
+  'Přejmenuje mluvčí (např. {"S1":"Petr","S2":"Moderátor"}) v přepisu i diarizaci. Zároveň si zapamatuje barvu jejich hlasu, takže v dalších videích se pozná sám (vypnutí: enroll=false).',
+  {
+    path: z.string(),
+    mapping: z.record(z.string(), z.string()),
+    enroll: z.boolean().optional().describe('Uložit hlasový otisk do knihovny hlasů (výchozí true)'),
+  },
   (a, extra) => runJob('rename_speakers', a, extra),
 );
 
@@ -1258,10 +1802,11 @@ tool(
   {
     path: z.string(),
     llm: z.boolean().optional().describe('false = jen rychlá heuristika bez jazykového modelu'),
+    backend: z.string().optional().describe('Vynech (auto = Hermes, když běží). "local" = vlastní gemma3 jen na výslovné přání uživatele – vedle Hermese se nevejde do GPU a je mnohonásobně pomalejší.'),
     force: z.boolean().optional(),
   },
   async (a, extra) => {
-    await runJob('analyze', { path: a.path, llm: a.llm ?? true, force: a.force }, extra);
+    await runJob('analyze', { path: a.path, llm: a.llm ?? true, backend: a.backend, force: a.force }, extra);
     return outlineText(a.path);
   },
 );
@@ -1341,27 +1886,43 @@ tool(
     return buildAndReport(name, segments, 0, {
       ranges: ranges.map((r) => `${tc(r.in)}–${tc(r.out)} věty ${r.ids.join(',')}`),
       planFile: a.planFile,
+      continuity: continuityWarnings(tr, plan.picks),
     });
   },
 );
 
 tool(
   'plan_edit_local',
-  'Navrhne střih úplně lokálně (lokální LLM vybere kapitoly a věty podle zadání, dorovná délku). Volitelně rovnou vytvoří sekvenci.',
+  'Navrhne střih úplně lokálně (lokální LLM vybere kapitoly a věty podle zadání, dorovná délku). Volitelně rovnou vytvoří sekvenci. ' +
+    'format "review" vrátí kompaktní návrh s texty vět a náhradníky ke kontrole – nejlevnější cesta, jak střih dočistit agentem.',
   {
     path: z.string().describe('Zdroj s přepisem'),
     instruction: z.string().describe('Zadání střihu česky'),
     targetSec: z.number().optional(),
+    backend: z.string().optional().describe('Vynech (auto = Hermes, když běží). "local" = vlastní gemma3 jen na výslovné přání uživatele – vedle Hermese se nevejde do GPU a je mnohonásobně pomalejší.'),
+    format: z.enum(['json', 'review']).optional().describe('json (výchozí) = celý plán; review = texty vybraných vět + náhradníci'),
     build: z
-      .object({ name: z.string(), source: z.string().optional().describe('Video na timeline (výchozí = path)'), extraAudio })
+      .object({
+        name: z.string(),
+        source: z.string().optional().describe('Video na timeline (výchozí = path)'),
+        extraAudio,
+        sceneCuts: z.boolean().optional().describe('Přichytit hranice klipů ke skrytým střihům obrazu (krátké zpravodajské sestřihy)'),
+      })
       .optional(),
   },
   async (a, extra) => {
-    const plan = await runJob('plan_edit', { path: a.path, instruction: a.instruction, targetSec: a.targetSec }, extra);
+    const plan = await runJob('plan_edit', { path: a.path, instruction: a.instruction, targetSec: a.targetSec, backend: a.backend }, extra);
+    if (a.format === 'review' && !a.build) return reviewText(plan, loadTranscript(a.path), a.targetSec);
     if (!a.build || !plan.picks.length) return plan;
     const tr = loadTranscript(a.path);
     const ranges = picksToRanges(tr, plan.picks, { padBefore: 0.08, padAfter: 0.15, mergeGap: 0.4 });
-    const built = await buildAndReport(a.build.name, withExtras(ranges, a.build.source || a.path, a.build.extraAudio), 0, {});
+    // stejné doladění konců podle zvuku jako build_sequence_from_transcript (dřív tu chybělo)
+    await refineOutPoints(a.path, ranges, extra);
+    const sceneCuts = a.build.sceneCuts ? await snapToSceneCuts(a.build.source || a.path, tr, ranges) : undefined;
+    const built = await buildAndReport(a.build.name, withExtras(ranges, a.build.source || a.path, a.build.extraAudio), 0, {
+      continuity: continuityWarnings(tr, plan.picks),
+      sceneCuts: sceneCuts?.length ? sceneCuts : undefined,
+    });
     return { plan, built };
   },
 );
@@ -1385,7 +1946,7 @@ tool(
     audio: z
       .array(z.object({ source: z.string(), audioTrack: z.number().int().optional(), offset: z.number().optional() }))
       .optional()
-      .describe('Zvuk na timeline (výchozí reference na A1)'),
+      .describe('Zvuk na timeline (výchozí = reference na A1). Mikrofony ze speakerTracks sem nedávej, když je reference mix – slouží jen k rozpoznání mluvčích. Každý zvuk na vlastní stopu (audioTrack 0, 1, …).'),
     speakerSource: z.enum(['auto', 'diarization', 'transcript']).optional(),
     picks: z.array(z.number().int()).optional().describe('Jen vybrané věty reference (střih příběhu + kamery)'),
     ranges: z.array(z.object({ start: z.number(), end: z.number() })).optional().describe('Úseky reference v s'),
@@ -1406,6 +1967,17 @@ tool(
   async (a, extra) => {
     const cams = a.cameras.map((c) => ({ role: 'close', speakers: [], ...c }));
     const audio = (a.audio?.length ? a.audio : [{ source: a.reference, audioTrack: 0 }]).map((x) => ({ audioTrack: 0, ...x }));
+    // dva zvuky na stejné stopě se v Premiere přepíšou – zůstal by jen poslední (agent tak jednou dal oba
+    // mikrofony na A1 a pod obrazem zbyl jen moderátor). Rozlož je na volné stopy a upozorni na to.
+    const audioNotes = [];
+    const usedTracks = new Set();
+    for (const x of audio) {
+      let t = x.audioTrack;
+      while (usedTracks.has(t)) t++;
+      if (t !== x.audioTrack) audioNotes.push(`${path.basename(x.source)} přesunut z A${x.audioTrack + 1} na A${t + 1} (stopa byla obsazená)`);
+      x.audioTrack = t;
+      usedTracks.add(t);
+    }
     const all = [...cams, ...audio];
     const needSync = all.filter((x) => x.offset === undefined && normKey(x.source) !== normKey(a.reference));
     if (needSync.length) {
@@ -1445,7 +2017,7 @@ tool(
       speakers: names,
       unmappedSpeakers: names.filter((n) => !cams.some((c) => c.speakers.includes(n))),
       offsets: all.map((x) => `${path.basename(x.source)} ${x.offset.toFixed(3)} s${x.syncConfidence !== undefined ? ` (jistota ${x.syncConfidence})` : ''}`),
-      warnings: all.filter((x) => x.syncConfidence !== undefined && x.syncConfidence < 1.5).map((x) => `Nejistá synchronizace: ${path.basename(x.source)}`),
+      warnings: [...all.filter((x) => x.syncConfidence !== undefined && x.syncConfidence < 1.5).map((x) => `Nejistá synchronizace: ${path.basename(x.source)}`), ...audioNotes],
       ...summarizeRuns(flat, cams),
     };
     if (a.dryRun) {
@@ -1456,6 +2028,7 @@ tool(
       };
     }
     const clips = multicamClips({ ranges, cameras: cams, audio, runsPerRange });
+    for (const c of clips) c.source = await premiereMedia(c.source, extra);
     const res = await premiere('buildTimeline', { name: a.name, clips }, 1800000);
     return { ...report, sequence: res.name, sequenceID: res.sequenceID, duration: tc(res.duration), clipsPlaced: `${res.clips}/${res.total}`, premiereWarnings: res.warnings };
   },
