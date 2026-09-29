@@ -275,7 +275,9 @@ var PMCP = {};
         // "Vložit video…" v panelu: uživatel čeká video na timeline – nová sekvence podle klipu (stejné fps
         // a rozlišení jako video), jeho rozpracované sekvence se nemění
         if (a.openSequence && !isAudioOnly(it)) {
-          var sq = app.project.createNewSequenceFromClips(it.name.replace(/\.[^.]+$/, ''), [it], bin);
+          // jen skutečná přípona – „…x265 5.1 BONE“ by obecné /\.[^.]+$/ usekl na „…x265 5“
+          var sq = app.project.createNewSequenceFromClips(
+            it.name.replace(/\.(mp4|mov|mkv|mxf|avi|m4v|webm|mts|m2ts|wav|mp3|m4a|aac)$/i, ''), [it], bin);
           if (sq) { activate(sq); r.sequence = sq.name; }
         }
         res.push(r);
