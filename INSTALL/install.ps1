@@ -379,7 +379,13 @@ if (-not $gpu -and $cfg.whisper.device -ne 'cpu') {
 }
 
 Write-Host '  [9] Registrace MCP (Claude Code / Claude Desktop / Codex)'
-& node (Join-Path $root 'scripts\register.mjs')
+if ($fromTemp) {
+    # zkusebni instalace do TEMP nesmi zaregistrovat server, ktery po smazani slozky zmizi
+    # (Claude Desktop pak ukazoval na neexistujici ...\Temp\... - stalo se 2026-09-28/29)
+    Write-Host '      ! instalace z TEMP - registraci MCP preskakuji' -ForegroundColor Yellow
+} else {
+    & node (Join-Path $root 'scripts\register.mjs')
+}
 
 # ------------------------------------------------------------------ 3. OVERENI PO INSTALACI
 Head '3/4 Overeni instalace'
