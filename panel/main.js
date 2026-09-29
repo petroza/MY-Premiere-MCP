@@ -186,15 +186,6 @@
     loadHost().then(function (ok) { log(ok ? 'host.jsx znovu načten' : 'host.jsx NEnačten'); });
   });
 
-  $('tplExport').addEventListener('click', function () {
-    $('prompt').value = 'Exportuj analýzu videa (nástroj export_analysis): ';
-    $('prompt').focus();
-  });
-  $('tplImport').addEventListener('click', function () {
-    $('prompt').value = 'Sestříhej podle plánu z jiné AI (nástroj build_from_plan) – soubor s plánem: ___ , zdrojové video: ___';
-    $('prompt').focus();
-  });
-
   $('addCaptions').addEventListener('click', function () {
     if (child) { out('Nejdřív počkej, až agent doběhne (nebo klikni Stop).', 'err'); return; }
     var chars = Number($('ccChars').value);
@@ -245,13 +236,44 @@
     });
   }
 
+  function importPaths(paths) {
+    if (!paths.length) return;
+    if (child) { out('Nejdřív počkej, až předchozí úloha doběhne (nebo klikni Stop).', 'err'); return; }
+    runTool('Vložit do projektu: ' + paths.map(function (p) { return path.basename(p); }).join(', '),
+      'import_media', { paths: paths, openSequence: true });
+  }
+
   $('importVideo').addEventListener('click', function () {
     if (child) { out('Nejdřív počkej, až předchozí úloha doběhne (nebo klikni Stop).', 'err'); return; }
-    pickFiles('Vložit video do projektu', function (paths) {
-      if (!paths.length || child) return;
-      runTool('Vložit do projektu: ' + paths.map(function (p) { return path.basename(p); }).join(', '),
-        'import_media', { paths: paths, openSequence: true });
-    });
+    pickFiles('Vložit video do projektu', importPaths);
+  });
+
+  // Přetažení souborů z Průzkumníka: kamkoli do panelu (zvýrazní se řádek „Vložit video…“). Bez preventDefault
+  // na celém okně by prohlížeč panelu přetažené video „otevřel“ místo panelu.
+  var dropRow = $('dropRow');
+  function dropPaths(ev) {
+    var dt = ev.dataTransfer, paths = [], i;
+    for (i = 0; dt.files && i < dt.files.length; i++) if (dt.files[i].path) paths.push(dt.files[i].path);
+    if (!paths.length) {
+      // CEF bez File.path: cesty z text/uri-list (file:///D:/…)
+      (dt.getData('text/uri-list') || '').split(/\r?\n/).forEach(function (u) {
+        if (/^file:\/\//i.test(u)) paths.push(decodeURIComponent(u.replace(/^file:\/\/\/?/i, '')).replace(/\//g, '\\'));
+      });
+    }
+    return paths;
+  }
+  var dragDepth = 0;
+  window.addEventListener('dragenter', function (ev) { ev.preventDefault(); dragDepth++; dropRow.classList.add('drag'); });
+  window.addEventListener('dragleave', function () { if (--dragDepth <= 0) { dragDepth = 0; dropRow.classList.remove('drag'); } });
+  window.addEventListener('dragover', function (ev) { ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
+  window.addEventListener('drop', function (ev) {
+    ev.preventDefault();
+    dragDepth = 0;
+    dropRow.classList.remove('drag');
+    var paths = dropPaths(ev);
+    if (paths.length) importPaths(paths);
+    else out('✖ Z přetažení se nepodařilo zjistit cestu k souboru (typy: ' +
+      Array.prototype.join.call(ev.dataTransfer.types || [], ', ') + ') – použij tlačítko Vložit video…', 'err');
   });
 
   $('undo').addEventListener('click', function () {

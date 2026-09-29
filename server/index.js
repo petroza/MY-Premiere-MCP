@@ -318,7 +318,7 @@ const cacheIndex = (kind) => {
 };
 
 function loadIndexed(kind, source) {
-  const f = cacheIndex(kind)[normKey(source)];
+  const f = cacheIndex(kind)[normKey(originalMedia(source))];
   return f && fs.existsSync(f) ? readJson(f) : null;
 }
 
@@ -346,7 +346,7 @@ function originalMedia(p) {
 function loadAnalysis(source) {
   const an = loadIndexed('analysis', source);
   if (!an) return null;
-  const tr = loadIndex()[normKey(source)];
+  const tr = loadIndex()[normKey(originalMedia(source))];
   const same = (a, b) => a && b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
   return tr && an.transcript && !same(an.transcript, tr) ? null : an;
 }

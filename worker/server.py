@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from worker.common import CONFIG, Cancelled, cache_dir, log, read_json, read_token, write_json  # noqa: E402
+from worker.common import CONFIG, Cancelled, cache_dir, log, original_media, read_json, read_token, write_json  # noqa: E402
 from worker import analysis, asr, audiosync, diarize, frame, gpu, media  # noqa: E402
 
 VERSION = "0.2.0"
@@ -113,7 +113,10 @@ class Store:
             self._save(job)
             log(f"úloha {jid} {job['type']} start")
             try:
-                job["result"] = HANDLERS[job["type"]](job["params"], Ctx(job, self))
+                params = job["params"]
+                if job["type"] != "prepare_media" and isinstance(params.get("path"), str):
+                    params = {**params, "path": original_media(params["path"])}
+                job["result"] = HANDLERS[job["type"]](params, Ctx(job, self))
                 job.update(status="done", progress=1.0, message="hotovo")
             except Cancelled:
                 job.update(status="cancelled", message="zrušeno")

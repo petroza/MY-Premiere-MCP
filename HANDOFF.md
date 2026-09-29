@@ -1149,3 +1149,22 @@ soubor se nepřepíše → `<název> (převedeno).mp4`. Když na disku originál
 2,2 GB) nebo složka není zapisovatelná, jde do `cache/media` a výsledek to hlásí (`fallback`). Starší převody
 v `cache/media` se dál používají (projekty se na ně odkazují). Nedokončený `.part.mp4` se při chybě smaže.
 Ověřeno: vedle originálu, opakované volání z cache, fallback u plného D:, cizí MP4 nepřepsáno.
+
+### 21. Jazyk přepisu, převedená média v plánech, upoutávky, panel (2026-09-29)
+
+- **Automatická kontrola jazyka** (`asr._probe_language`): když zadání jazyk neurčí, 4 ukázky po 30 s (10–85 %
+  délky) přes `detect_language`; převažuje-li jiný jazyk než výchozí `cs`, přepis běží po úsecích. Důvod:
+  Robin Hood (EN, 2 h) s vynucenou češtinou = 1857 slov nesmyslů, Gummo taky. Česká debata zůstává `cs`
+  (4/4 hlasy), ~1 s. Staré špatné přepisy se samy nepřepíšou – `transcribe_media` s `language: ""`.
+- **Převedené MP4 → originál i ve workeru** (`common.original_media`, dispatcher v `worker/server.py` mapuje
+  `params.path` u všech úloh kromě `prepare_media`) a v serveru (`loadIndexed`, `loadAnalysis`). Panelový Hermes
+  nad sekvencí z převedeného Gumma hlásil „neexistuje přepis“.
+- **Upoutávka ≠ téma:** styl („akční“, „upoutávka“, „dynamický“, „napětí“…) se nebere jako obsahové téma
+  (Robin Hood: téma „akce“ vyřadilo 34 vět → 37 s z 60; teď 60,8 s). Režim `trailer`: hák, krátké údery,
+  neprozrazovat konec, nekončit pointou, nepřidávat povinnou pointovou kapitolu, do výběru jen úseky ≤ 8 s
+  (Gummo: dřív 11s monology, teď 28 úderů po 1–4 s).
+- **Panel:** zrušena Záložní varianta (ChatGPT), drag & drop souborů (celý panel, zvýrazní řádek Vložit video;
+  cesta z `File.path`, jinak `text/uri-list`, jinak hláška s typy), tlačítka `nowrap` a akční trojice se
+  zalamuje jako celek. Horní bílou lištu s křížkem kreslí Premiere u plovoucího panelu – z rozšíření nejde měnit.
+- **INSTALL_SMALL** (online instalace z GitHubu) + `install.ps1 -Hermes`; instalace z TEMP neregistruje MCP
+  (zkušební instalace zapsala do Claude Desktop dočasnou cestu – vráceno).

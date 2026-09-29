@@ -389,8 +389,16 @@ def _instruction_topics(instruction: str, backend: str) -> tuple[list[str], bool
     meta = ("spor", "konflikt", "polemik", "hádk", "výčitk", "vycitk", "kritik", "rozdíl", "rozdil", "odlišn",
             "odlisn", "argument", "názor", "nazor", "postoj", "výrok", "vyrok", "moment", "vzkaz", "sdělení",
             "sdeleni", "atmosfér", "atmosfer", "vyjádřen", "vyjadren")
+    # Styl a forma střihu taky nejsou témata: „akční upoutávka“ dala téma „akce“ a kontrola tématu vyřadila 34 vět
+    # (Robin Hood, 2026-09-29) – zbylo 37 s z 60. Upoutávka o čemkoli je výběr podle síly a tempa, ne podle obsahu.
+    style = ("akc", "akčn", "akcn", "upoutáv", "upoutav", "trailer", "teaser", "promo", "dynami", "napět", "napet",
+             "napín", "napin", "tempo", "rychl", "dramat", "vtip", "humor", "emoc", "strhuj", "sestřih", "sestrih")
+    styled = [t for t in out if any(m in _norm(t) for m in style)]
+    out = [t for t in out if t not in styled]
     filtered = [t for t in out if not any(m in _norm(t) for m in meta)]
     relational = bool(out) and not filtered
+    if styled and not out and not about:
+        general = True  # jen styl, žádné téma -> obsah neomezovat (jako „nejsilnější momenty“)
     out = [] if general else filtered[:4]
     # "o bydlení a parkování": témata spojená přímo spojkou jsou samostatná vždy – úsudek modelu tady kolísal
     # (stejné zadání jednou true, po úpravě promptu false). "masifikací a skutečnou demokratizací" (slovo mezi) ne.
@@ -557,6 +565,8 @@ def plan_edit(params: dict, ctx) -> dict:
     # Buči, E40 a divadla v Mariupolu (Ukraine from Above, Putin 2026-09-28). Samotné „nejsilnější“ to nespouští
     # – u debaty znamená silné argumenty, ne násilí.
     intense = bool(re.search(r"otřes|strašn|pekeln|krut|drastic|brutál|šokuj|děsiv|hrůz|horor", instruction, re.I))
+    # upoutávka: jiná dramaturgie než sestřih – nekončí pointou, ale napětím, a nesmí prozradit konec
+    trailer = bool(re.search(r"upoutáv|upoutav|trailer|teaser|promo", instruction, re.I))
     # výběr jen jako tři pole ID (2–3 tokeny na větu místo ~20 u objektu s tématem a prioritou – generování je
     # u lokálního modelu nejdražší); k tématům věty přiřadí až kontrola tématu
     ids_arr = {"type": "array", "items": {"type": "integer"}}
@@ -937,6 +947,12 @@ def plan_edit(params: dict, ctx) -> dict:
             loud = [u for u in units if shout(u)]
             if len(units) - len(loud) >= 4:
                 units[:] = [u for u in units if not shout(u)]
+        # upoutávka = krátké střihy: dlouhé monology (Gummo: 11 s o otrávených kočkách, 30 s vyprávění) do ní
+        # nepatří, i když jsou silné – model je bral, přestože prompt chce krátké údery
+        if trailer:
+            short_units = [u for u in units if u["dur"] <= 8.0]
+            if sum(u["dur"] for u in short_units) >= 2 * target:
+                units[:] = short_units
         # Uvozovací a organizační věty moderátora ("Začíná další vydání pořadu…", "Magistrát má 45 členů",
         # "vašich třicet vteřin pro diváky") nejsou obsah, ale mechanika pořadu – a model je i přes výslovný
         # zákaz v promptu bral jako "vstup s kontextem". Proto se do redakce vůbec nenabízejí. Otázky moderátora
@@ -986,6 +1002,11 @@ def plan_edit(params: dict, ctx) -> dict:
             "Vstup musí být výrok, který rovnou nastolí téma zadání (silné tvrzení, konkrétní výtka, jasně "
             "pojmenovaný problém) – NE uvozovací a organizační věty moderátora, představování hostů ani výčty "
             "čísel o složení zastupitelstva a podobná administrativa. "
+            + ("Je to UPOUTÁVKA, ne shrnutí: začni hákem (nejsilnější replika nebo otázka), pak krátké úderné "
+               "repliky, které stupňují napětí a naznačí konflikt a sázky. Krátké věty, výkřiky a repliky z akce "
+               "jsou tu žádoucí. NEPROZRAZUJ rozuzlení ani konec příběhu (nic z poslední čtvrtiny, co odhaluje, "
+               "jak to dopadne) a neskončí pointou – skonči napínavou replikou nebo otázkou. "
+               if trailer else "")
             + ("Zadání chce nejotřesnější místa: řaď úseky podle síly dopadu na diváka, ne podle informační "
                "hodnoty. Přednost mají konkrétní svědectví o násilí, obětech a zločinech (co se komu stalo, kolik "
                "mrtvých, kdo to udělal) a výpovědi očitých svědků v první osobě – i krátká věta jako „Ten člověk "
@@ -1051,7 +1072,8 @@ def plan_edit(params: dict, ctx) -> dict:
             psum = sum(units[n - 1]["dur"] for n in pick)
         # pointa je povinná: výběr bez jediného úseku z kapitol, které model sám označil za pointu, končil
         # náhodnou zprávou – doplň z poslední pointové kapitoly (až ~20 % cíle)
-        if pick and key_ch_pointa and not any(chapter_of.get(units[n - 1]["ids"][0]) in key_ch_pointa for n in pick):
+        # (u upoutávky ne – pointová kapitola bývá u konce filmu a prozradila by rozuzlení)
+        if not trailer and pick and key_ch_pointa and not any(chapter_of.get(units[n - 1]["ids"][0]) in key_ch_pointa for n in pick):
             cand = [n for n, u in enumerate(units, 1) if chapter_of.get(u["ids"][0]) in key_ch_pointa]
             budget = 0.2 * target
             for n in reversed(cand):

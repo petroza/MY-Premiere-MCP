@@ -56,6 +56,16 @@ def norm_key(path: str) -> str:
     return os.path.normcase(os.path.abspath(path)).lower()
 
 
+def original_media(path: str) -> str:
+    """Převedené MP4 (worker/media.py) -> originální MKV. Přepis, osnova i diarizace patří originálu – časy jsou
+    stejné. Bez tohoto plan_edit nad sekvencí z převedeného souboru hlásil „neexistuje přepis“ (Gummo, 2026-09-29)."""
+    try:
+        idx = read_json(CACHE / "media" / "index.json")
+    except (OSError, ValueError):
+        return path
+    return idx.get(os.path.normcase(os.path.abspath(path))) or idx.get(norm_key(path)) or path
+
+
 def file_key(path: str, extra) -> str:
     st = os.stat(path)
     raw = json.dumps([norm_key(path), st.st_size, int(st.st_mtime), extra], ensure_ascii=False, sort_keys=True)

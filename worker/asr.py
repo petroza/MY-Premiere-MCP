@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 
 from . import gpu
-from .common import CONFIG, ROOT, Cancelled, cache_file, index_get, index_set, read_json, write_json
+from .common import CONFIG, ROOT, Cancelled, cache_file, index_get, index_set, log, read_json, write_json
 
 PUNCT_END = (".", "!", "?", "…")
 
@@ -142,6 +142,50 @@ def attribute_by_mics(words: list[dict], tracks: list[dict], progress) -> list[s
     return [t["name"] for t in tracks]
 
 
+def _probe_language(model, src: str, samples: int = 4, secs: float = 30.0) -> dict | None:
+    """Převažující jazyk řeči: detekce na několika 30s ukázkách z celé délky (10–85 %, úvodní titulky a hudbu
+    přeskočí), většinovým hlasováním. None, když ukázky nejdou načíst."""
+    import av
+    import numpy as np
+
+    try:
+        with av.open(src) as c:
+            dur = float(c.duration / av.time_base) if c.duration else 0.0
+        if dur <= 0:
+            return None
+        votes: dict[str, float] = {}
+        starts = [dur * (0.10 + 0.75 * i / max(1, samples - 1)) for i in range(samples)] if dur > secs * 2 else [0.0]
+        for t in starts:
+            with av.open(src) as c:
+                a = c.streams.audio[0]
+                c.seek(int(t / a.time_base), stream=a)
+                rs = av.AudioResampler(format="flt", layout="mono", rate=16000)
+                buf: list = []
+                got = 0
+                for fr in c.decode(a):
+                    for o in rs.resample(fr):
+                        arr = o.to_ndarray().reshape(-1)
+                        buf.append(arr)
+                        got += arr.size
+                    if got >= secs * 16000:
+                        break
+            if not buf:
+                continue
+            audio = np.concatenate(buf)[: int(secs * 16000)].astype("float32")
+            try:
+                lang, prob, _ = model.detect_language(audio, vad_filter=True)
+            except Exception:  # noqa: BLE001 – ukázka bez řeči (hudba, titulky) – přeskočit
+                continue
+            votes[lang] = votes.get(lang, 0.0) + float(prob)
+        if not votes:
+            return None
+        best = max(votes, key=votes.get)
+        return {"language": best, "votes": {k: round(v, 2) for k, v in sorted(votes.items(), key=lambda kv: -kv[1])}}
+    except Exception as e:  # noqa: BLE001 – detekce je jen pojistka, přepis poběží s výchozím jazykem
+        log(f"asr: detekce jazyka selhala ({e}) – ponechávám výchozí jazyk")
+        return None
+
+
 def transcribe(params: dict, ctx) -> dict:
     src = params["path"]
     if not os.path.exists(src):
@@ -163,14 +207,25 @@ def transcribe(params: dict, ctx) -> dict:
     existing = index_get("transcripts", src)
     if existing and existing.exists() and not params.get("force") and not explicit:
         return {"file": str(existing), "cached": True}
+    t0 = time.time()
+    ctx.progress(0.01, f"načítám Whisper {opts['model']}")
+    model, device = gpu.whisper(opts["model"])
+    probe = None
+    if "language" not in params and opts["language"]:
+        # Jazyk nikdo nezadal -> výchozí z configu (cs) jen tehdy, když materiál opravdu je v něm. Anglický film
+        # s vynucenou češtinou Whisper „přeložil“: Robin Hood 2 h = 1857 slov nesmyslů, Gummo, Putin (2026-09-28/29).
+        # Jinak rozpoznávání po úsecích (i smíšený materiál: ukrajinský dokument s anglickým vypravěčem).
+        probe = _probe_language(model, src)
+        if probe and probe["language"] != opts["language"]:
+            log(f"asr: {os.path.basename(src)} – převažuje jazyk {probe['language']} ({probe['votes']}), "
+                f"ne {opts['language']} -> rozpoznávání jazyka po úsecích")
+            opts["language"] = None
+            opts["multilingual"] = True
     out = cache_file("transcripts", src, opts)
     if out.exists() and not params.get("force"):
         index_set("transcripts", src, out)
         return {"file": str(out), "cached": True}
-
-    t0 = time.time()
-    ctx.progress(0.01, f"načítám Whisper {opts['model']}")
-    model, device = gpu.whisper(opts["model"])
+    ctx.progress(0.03, "přepisuji")
     ctx.progress(0.04, f"přepisuji ({device})")
     # automatický jazyk = zjišťovat pro každý úsek zvlášť: jinak Whisper podle prvních 30 s určí jeden jazyk pro
     # celý soubor a zbytek do něj "přeloží" (film EN+UK s ruským úvodem dal i anglického vypravěče rusky)

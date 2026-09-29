@@ -34,6 +34,7 @@
   #mic.recording { background:var(--err); border-color:var(--err); color:#fff; animation: pulse-anim 1s ease-in-out infinite; }
   .row { display:flex; gap:6px; align-items:center; }
   textarea { width:100%; min-height:74px; resize:vertical; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:6px; font:inherit; }
+  button { white-space:nowrap; flex:none; }
   select, button { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:4px; padding:4px 8px; font:inherit; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   button:disabled { opacity:.5; }
@@ -42,6 +43,9 @@
   #out:not(.show-tools) .tool { display:none; }
   details { color:var(--dim); } details pre { max-height:120px; overflow:auto; margin:4px 0 0; white-space:pre-wrap; }
   .grow { flex:1; }
+  .actions { display:flex; gap:6px; margin-left:auto; }
+  #dropRow { border:1px dashed transparent; border-radius:4px; padding:2px; margin:-3px; }
+  #dropRow.drag { border-color:var(--accent); background:rgba(111,140,255,.12); }
 </style>
 </head>
 <body>
@@ -86,7 +90,7 @@
   <div id="out"></div>
 
   <textarea id="prompt" lang="cs" spellcheck="false" placeholder="Např.: Přepiš zvuk aktivní sekvence a udělej novou sekvenci jen s větami o cenách, ať to dává smysl. Vyhoď přeřeknutí a dlouhé pauzy."></textarea>
-  <div class="row">
+  <div class="row" style="flex-wrap:wrap">
     <select id="agent">
       <option value="claude">Claude Code</option>
       <option value="codex">Codex (GPT)</option>
@@ -107,10 +111,11 @@
     <label class="row" title="Navázat na předchozí konverzaci"><input type="checkbox" id="pokracovat" checked> navázat</label>
     <label class="row" title="Zobrazit i technické volání nástrojů (ladění)"><input type="checkbox" id="nastroje"> nástroje</label>
     <button id="mic" title="Nadiktovat zadání mikrofonem (lokálně, Whisper) - klikni, mluv, klikni znovu">🎤</button>
-    <span class="grow"></span>
+    <span class="actions">
     <button id="undo" title="Vrátí jeden krok zpět v Premiere. Funguje jen na jedno použití mezi akcemi - klikni jednou a zkontroluj výsledek, opakované klikání za sebou může klip poškodit místo opravit.">↶ Zpět</button>
     <button id="stop" disabled>Stop</button>
     <button id="run" class="primary">Spustit</button>
+    </span>
   </div>
 
   <div class="row" style="flex-wrap:wrap">
@@ -140,23 +145,10 @@
     </label>
     <button id="addCaptions" title="Vygeneruje titulky z přepisu podle aktuálního stavu sekvence (případně přeložené do češtiny) a přidá je do Premiery jako titulkovou stopu. Spustit až po hotovém střihu.">💬 Přidat titulky</button>
   </div>
-  <div class="row">
+  <div class="row" id="dropRow">
     <button id="importVideo" title="Vloží video do projektu. MKV/WebM nejdřív převede na MP4 (na MKV Premiere padá už při importu); obraz se jen přebalí bez ztráty, poškozený soubor se opraví překódováním. Přepis se dělá z originálu, nic se nepřepisuje znovu.">🎬 Vložit video…</button>
-    <span class="dim">MKV se samo převede na MP4</span>
+    <span style="color:var(--dim)">nebo sem přetáhni soubor · MKV se samo převede na MP4</span>
   </div>
-
-  <details>
-    <summary>Záložní varianta: jiná AI (ChatGPT apod.)</summary>
-    <div style="color:var(--dim);margin:6px 0">
-      1) Vlož zadání "Exportuj analýzu…" ↓ – vznikne jeden .md soubor se vším (instrukce + přepis). Otevři ho a celý obsah
-      vlož do ChatGPT v jedné zprávě – sama pozná, co dělat, a zeptá se tě, co chceš nastříhat.
-      &nbsp; 2) Odpověz jí a dostaneš JSON plán – ulož ho do souboru a vlož zadání "Sestříhej podle plánu…" ↓
-    </div>
-    <div class="row" style="flex-wrap:wrap;gap:6px">
-      <button id="tplExport">Vzor: exportovat analýzu</button>
-      <button id="tplImport">Vzor: sestříhat podle plánu</button>
-    </div>
-  </details>
 
   <details>
     <summary>Most (port <span id="port"></span>) · požadavků: <span id="pocet">0</span> · <a href="#" id="reload" style="color:var(--accent)">znovu načíst host.jsx</a></summary>
