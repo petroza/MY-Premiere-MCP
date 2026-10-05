@@ -26,6 +26,9 @@ stav projektu: `mcp__premiere__get_project`, …). Nehledej po jednom.
   trvá desítky minut a blokuje Premiere).
 - Více kamer: `build_multicam_sequence`, `reference` = hlavní zvuk (mix); `audio` nezadávej (výchozí je reference) –
   mikrofony mluvčích patří do `speakerTracks` přepisu, ne na timeline. Nejdřív `dryRun`.
+- Dabing (komentář namluvený zvlášť, obraz = záznamy bez řeči): `transcribe_media` komentáře → `index_broll`
+  (`sheets: true` – prohlédni si archy) → `build_voiceover_sequence` se `segments` (ke každé větě záběr, který
+  ukazuje, o čem mluví). Ne `build_sequence_from_transcript` – ve videu žádná řeč není.
 - Cestu ke zdroji (`path`/`source`) předávej vždy celou.
 - Destruktivní nástroje jen na výslovné přání a předtím `backup_project`.
 - Když `build_sequence_from_transcript` vrátí `continuity` (utnuté souvětí), postav sekvenci znovu s opraveným

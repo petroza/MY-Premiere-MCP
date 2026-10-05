@@ -1168,3 +1168,22 @@ Ověřeno: vedle originálu, opakované volání z cache, fallback u plného D:,
   zalamuje jako celek. Horní bílou lištu s křížkem kreslí Premiere u plovoucího panelu – z rozšíření nejde měnit.
 - **INSTALL_SMALL** (online instalace z GitHubu) + `install.ps1 -Hermes`; instalace z TEMP neregistruje MCP
   (zkušební instalace zapsala do Claude Desktop dočasnou cestu – vráceno).
+
+### 22. Obraz pod dodatečně namluvený komentář (dabing / voiceover) – 2026-10-05
+
+Uživatel nahrál 4K plochu (After Effects + Premiere přes Claude), pak v Premiere namluvil komentář (samostatný
+`Audio 1_3.wav`) a chtěl obraz „aby odpovídal tomu, o čem mluví“. Panelový Hermes vzal za zdroj záznam obrazovky
+(bez řeči) → „vybráno 0 vět“. Nové:
+- `worker/broll.py`: `broll_index` (klíčové snímky → sloučení statických míst do záběrů → popis vision modelem:
+  Hermes s viděním, při chybě vlastní Qwen3-VL; archy 4×3 pro agenty, kteří vidí obrázky; cache `cache/broll`),
+  `broll_plan` (LLM jen kandidáti ke každé větě podle obsahu + deterministické `_assign`: ~1 záběr / 5 s,
+  bez opakování – jedním tahem model šel po pořadí čísel a bral jen jeden záznam), `media_info`.
+- Server: `index_broll` (text + volitelně archy jako obrázky), `build_voiceover_sequence` (komentář beze změny na A1,
+  video-only klipy přes host `buildTimeline`, střih 0,25 s před větou; `segments` od agenta nebo automaticky).
+  Komentář = zvukový klip, jehož zdroj nemá v sekvenci obraz. Zdroje ke komentáři se pamatují
+  (`cache/broll/voiceover-sources.json`) – hotová sekvence obsahuje jen vybrané záběry.
+- `scripts/local-edit.mjs` (panelový Hermes): pozná dabing (samostatný komentář + obraz bez řeči, nebo slova
+  komentář/dabing/namluv/„o čem mluvím“) a volá `build_voiceover_sequence`.
+- Návod pro agenty: CLAUDE.md, AGENTS.md, panel/agent-system.md, instrukce MCP serveru.
+Ověřeno: agentní cesta (Claude, 22 segmentů) → „PREZENTACE – obraz podle komentáře“ 2:16,36; automatická (Hermes)
+→ 22 záběrů ze 3 záznamů, 26 s z cache (popis 75 záběrů poprvé ~9 min; Hermes jednou timeoutoval → Qwen3-VL).

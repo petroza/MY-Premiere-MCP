@@ -20,6 +20,18 @@ Ovládáš Adobe Premiere Pro přes MCP server `premiere`. Uživatel píše čes
    (výběr utnul souvětí), postav ji znovu s doplněným pokračováním/začátkem.
 5. Shrň uživateli, co jsi vybral a proč (ID vět + délka výsledku).
 
+## Dabing / dodatečně namluvený komentář (obraz pod komentář)
+Když je řeč jen na samostatné zvukové stopě (komentář namluvený dodatečně) a obraz jsou záznamy bez řeči
+(záznam obrazovky, b-roll), NEstříhej podle řeči ve videu – tam žádná není. Postup:
+1. `transcribe_media` komentáře (zvuk ze sekvence) – věty s časy.
+2. `index_broll` (bez `paths` = obrazové zdroje z aktivní sekvence; další záznamy přidej do `paths`).
+   Když vidíš obrázky, dej `sheets: true` (a klidně `describe: false`) a archy si prohlédni sám – přesnější než popis.
+3. Ke každé větě vyber záběr, který ukazuje přesně to, o čem věta mluví; dlouhé věty a výčty („stovky variant“)
+   rozděl na víc různých záběrů; nepoužívej stejné místo dvakrát; drž logiku děje (zadání → práce → výsledek).
+4. `build_voiceover_sequence` se `segments` (`source`, `in` = čas ve zdroji, `sentence` = ID věty, nebo `at` = čas
+   v komentáři pro další záběr uvnitř dlouhé věty) – NOVÁ sekvence, komentář beze změny, střih těsně před větou.
+   Bez `segments` to udělá lokální model sám (pomalejší, méně přesné).
+
 ## Pravidla
 - Časy jsou v sekundách. Časy přepisu jsou ve zdroji, `transcribe_sequence` vrací časy timeline.
 - Destruktivní nástroje (`remove_timeline_ranges`, `remove_clips`) jen na výslovné přání.

@@ -954,6 +954,7 @@ const server = new McpServer(
       'DLOUHÝ MATERIÁL (šetři tokeny): analyze_transcript vrátí kompaktní osnovu kapitol (lokální LLM, zdarma);',
       'plný text čti jen u vybraných kapitol přes get_transcript s format "compact".',
       'VÍCE KAMER: build_multicam_sequence – synchronizuje kamery podle zvuku a přepíná podle mluvčího (nejdřív dryRun).',
+      'DABING / KOMENTÁŘ NAMLUVENÝ ZVLÁŠŤ (řeč jen na samostatné zvukové stopě, obraz = záznamy bez řeči): index_broll → build_voiceover_sequence se segments (ke každé větě komentáře záběr, který ukazuje, o čem mluví).',
       'Dlouhé úlohy běží v lokálním Workeru; worker_status ukazuje frontu.',
     ].join(' '),
   },
@@ -1651,6 +1652,189 @@ tool(
 
 tool('reload_bridge', 'Znovu načte host.jsx v panelu (po úpravě kódu, bez restartu Premiere).', {}, async () =>
   JSON.parse(await bridge('/reload', {}, 30000)),
+);
+
+/* ------------------------------------------------------------------ Obraz pod komentář (dabing / voiceover) */
+
+// Komentář namluvený dodatečně = zvukový klip v sekvenci, jehož zdroj nemá v sekvenci obraz; obrazové zdroje =
+// média obrazových klipů. (Běžný střih tu nefunguje: řeč není ve videu – Hermes hlásil „vybráno 0 vět“.)
+function voiceoverLayout(seq) {
+  const videos = [...new Set(seq.clips.filter((c) => c.kind === 'video' && c.mediaPath).map((c) => c.mediaPath))];
+  const auds = seq.clips.filter((c) => c.kind === 'audio' && c.mediaPath && !videos.includes(c.mediaPath));
+  const narration = auds.sort((a, b) => b.end - b.start - (a.end - a.start))[0] || null;
+  return { videos, narration };
+}
+
+// Obrazové zdroje patřící ke komentáři: hotová sekvence obsahuje jen vybrané záběry, takže další pokus z ní by měl
+// méně materiálu (Hermes podruhé jen „z 1 záznamů“). Pamatuje se sjednocení všech zdrojů, které ke komentáři kdy byly.
+const VO_SOURCES = path.join(ROOT, 'cache', 'broll', 'voiceover-sources.json');
+function voSources(narration, paths) {
+  let all = {};
+  try {
+    all = readJson(VO_SOURCES);
+  } catch {
+    /* první použití */
+  }
+  const k = normKey(originalMedia(narration));
+  const merged = [...new Set([...(all[k] || []), ...paths.map((p) => originalMedia(p))])].filter((p) => fs.existsSync(p));
+  all[k] = merged;
+  fs.mkdirSync(path.dirname(VO_SOURCES), { recursive: true });
+  fs.writeFileSync(VO_SOURCES, JSON.stringify(all, null, 1), 'utf8');
+  return merged;
+}
+
+async function brollSources(a, extra) {
+  let paths = a.paths;
+  let seqName;
+  if (!paths?.length) {
+    const seq = await premiere('getSequence', { sequence: a.sequence, clips: true });
+    seqName = seq.name;
+    const lay = voiceoverLayout(seq);
+    paths = lay.narration ? voSources(lay.narration.mediaPath, lay.videos) : lay.videos;
+  }
+  if (!paths?.length) throw new Error('Nemám obrazové zdroje – předej "paths" (záznamy obrazovky / b-roll).');
+  return { paths: paths.map((p) => originalMedia(p)), seqName };
+}
+
+const shotLine = (s) =>
+  `S${s.id} ${path.basename(s.source).replace(/\.[^.]+$/, '').slice(-14)} ${tc(s.from).slice(3, 8)}–${tc(s.to).slice(3, 8)}` +
+  `${s.desc ? `: ${s.desc.replace(/\s+/g, ' ')}` : ''}`;
+
+server.registerTool(
+  'index_broll',
+  {
+    description:
+      'OBRAZ POD DODATEČNĚ NAMLUVENÝ KOMENTÁŘ (dabing/voiceover): projde obrazové zdroje (záznamy obrazovky, b-roll bez řeči) ' +
+      'a vrátí přehled záběrů S1, S2… s časem. describe (výchozí true) = každý záběr popíše lokální vision model (Hermes s viděním / ' +
+      'Qwen3-VL) vč. textu na obrazovce; sheets: true = vrátí i náhledové archy jako obrázky (agent, který vidí obrázky, si je ' +
+      'prohlédne sám – přesnější než popis, stojí víc tokenů). Bez paths vezme obrazové zdroje z aktivní sekvence. Výsledek je ' +
+      'v cache. Pak build_voiceover_sequence se segments (zdroj + čas ve zdroji ke každé větě komentáře).',
+    inputSchema: {
+      paths: z.array(z.string()).optional().describe('Obrazové zdroje; bez zadání z aktivní sekvence'),
+      sequence: seqArg,
+      step: z.number().optional().describe('Rozestup vzorků v s (výchozí podle délky, ~90 vzorků na záznam)'),
+      describe: z.boolean().optional().describe('Popsat záběry vision modelem (výchozí true)'),
+      sheets: z.boolean().optional().describe('Vrátit i náhledové archy jako obrázky (výchozí false)'),
+    },
+  },
+  async (a, extra) => {
+    try {
+      const { paths } = await brollSources(a, extra);
+      const r = await runJob('broll_index', { paths, step: a.step, describe: a.describe !== false, sheets: !!a.sheets }, extra);
+      const text = [`Záběry (${r.shots.length}) ze zdrojů: ${paths.map((p) => path.basename(p)).join(', ')}` +
+        `${r.vision ? ` · popis: ${r.vision}` : ''}`, ...r.shots.map(shotLine),
+      'Zdroj a čas záběru pro segments: source = cesta zdroje, in = začátek záběru (s).',
+      ...paths.map((p) => `zdroj ${path.basename(p).replace(/\.[^.]+$/, '').slice(-14)} = ${p}`)].join('\n');
+      const content = [{ type: 'text', text }];
+      for (const f of r.sheets || []) content.push({ type: 'image', data: fs.readFileSync(f).toString('base64'), mimeType: 'image/jpeg' });
+      return { content };
+    } catch (e) {
+      return { isError: true, content: [{ type: 'text', text: String(e?.message || e) }] };
+    }
+  },
+);
+
+tool(
+  'build_voiceover_sequence',
+  'OBRAZ POD DODATEČNĚ NAMLUVENÝ KOMENTÁŘ (dabing/voiceover) – NOVÁ sekvence: komentář beze změny na A1, pod ním obraz ' +
+    'z jiných záznamů, střih vždy těsně před začátkem věty. Komentář i obrazové zdroje se bez zadání vezmou z aktivní sekvence ' +
+    '(komentář = zvukový klip, jehož zdroj nemá obraz). segments: agent sám určí ke každé větě komentáře (sentence = ID věty ' +
+    'z přepisu komentáře) zdroj a čas ve zdroji (in); obraz trvá do dalšího segmentu. Bez segments to udělá lokální model sám ' +
+    '(index_broll s popisem + přiřazení vět k záběrům). Postup pro agenta: transcribe_media komentáře → index_broll ' +
+    '(sheets pro přesnost) → build_voiceover_sequence se segments.',
+  {
+    name: z.string().optional(),
+    sequence: seqArg,
+    narration: z.string().optional().describe('Zvuk komentáře; bez zadání z aktivní sekvence'),
+    narrationIn: z.number().optional().describe('Začátek použité části komentáře ve zdroji (s)'),
+    narrationOut: z.number().optional().describe('Konec použité části komentáře ve zdroji (s)'),
+    paths: z.array(z.string()).optional().describe('Obrazové zdroje pro automatický výběr; bez zadání z aktivní sekvence'),
+    segments: z
+      .array(z.object({
+        source: z.string().describe('Obrazový zdroj'),
+        in: z.number().describe('Čas ve zdroji, odkud záběr začne (s)'),
+        sentence: z.number().int().optional().describe('ID věty komentáře, u které záběr začne'),
+        at: z.number().optional().describe('Nebo: čas v komentáři (s od začátku použité části), kdy záběr začne'),
+      }))
+      .optional(),
+    backend: z.string().optional().describe('Automatický výběr: lokální model (výchozí Hermes, když běží)'),
+  },
+  async (a, extra) => {
+    // komentář
+    let narr = a.narration;
+    let nIn = a.narrationIn;
+    let nOut = a.narrationOut;
+    let seq = null;
+    if (!narr || !a.paths?.length) {
+      try {
+        seq = await premiere('getSequence', { sequence: a.sequence, clips: true });
+      } catch {
+        /* bez sekvence – vše musí přijít v argumentech */
+      }
+    }
+    const layout = seq ? voiceoverLayout(seq) : { videos: [], narration: null };
+    if (!narr) {
+      if (!layout.narration) throw new Error('V sekvenci není samostatný zvuk komentáře – předej "narration".');
+      narr = layout.narration.mediaPath;
+      nIn ??= layout.narration.inPoint;
+      nOut ??= layout.narration.outPoint;
+    }
+    const tr = (await transcribe(narr, {}, extra)).data;
+    nIn ??= 0;
+    nOut ??= tr.duration;
+    const sentences = tr.segments
+      .filter((s) => s.end > nIn + 0.05 && s.start < nOut - 0.05)
+      .map((s) => ({ id: s.id, start: Math.max(0, s.start - nIn), end: Math.min(nOut, s.end) - nIn, text: s.text }));
+    if (!sentences.length) throw new Error('V komentáři není rozpoznaná řeč.');
+    const total = nOut - nIn;
+
+    // obraz ke každé větě
+    let segs;
+    let how;
+    if (a.segments?.length) {
+      const byId = Object.fromEntries(sentences.map((s) => [s.id, s]));
+      segs = a.segments.map((s) => {
+        const at = s.at ?? (byId[s.sentence] ? Math.max(0, byId[s.sentence].start - 0.25) : null);
+        if (at === null) throw new Error(`Segment ze ${path.basename(s.source)} nemá platné sentence ani at.`);
+        return { source: s.source, in: s.in, at, sentence: s.sentence };
+      }).sort((x, y) => x.at - y.at);
+      segs[0].at = 0;
+      segs.forEach((s, i) => { s.dur = (i + 1 < segs.length ? segs[i + 1].at : total) - s.at; });
+      segs = segs.filter((s) => s.dur > 0.05);
+      how = 'segmenty od agenta';
+    } else {
+      const paths = a.paths?.length ? a.paths.map((p) => originalMedia(p)) : voSources(narr, layout.videos);
+      if (!paths.length) throw new Error('Nemám obrazové zdroje – předej "paths".');
+      const idx = await runJob('broll_index', { paths, describe: true }, extra);
+      const pl = await runJob('broll_plan', { sentences, shots: idx.shots, duration: total, backend: a.backend }, extra);
+      segs = pl.segments;
+      how = `automaticky (${pl.backend}, popis záběrů: ${idx.vision})`;
+    }
+
+    // nesahat za konec záznamu
+    const info = await runJob('media_info', { paths: [...new Set(segs.map((s) => originalMedia(s.source)))] }, extra);
+    for (const s of segs) {
+      const d = info.durations[originalMedia(s.source)];
+      if (d && s.in + s.dur > d) s.in = Math.max(0, d - s.dur);
+    }
+
+    const clips = [];
+    const conv = new Map();
+    for (const s of segs) {
+      if (!conv.has(s.source)) conv.set(s.source, await premiereMedia(s.source, extra));
+      clips.push({ kind: 'video', track: 0, videoOnly: true, source: conv.get(s.source), in: s.in, at: s.at, dur: s.dur });
+    }
+    clips.push({ kind: 'audio', track: 0, source: await premiereMedia(narr, extra), in: nIn, at: 0, dur: total });
+    const name = a.name || `KOMENTÁŘ + OBRAZ ${new Date().toTimeString().slice(0, 5)}`;
+    const res = await premiere('buildTimeline', { name, clips }, 1800000);
+    const byIdText = Object.fromEntries(sentences.map((s) => [s.id, s.text.trim()]));
+    return {
+      ...res,
+      summary: `Vytvořena sekvence „${res.name}“ (${tc(res.duration)}): komentář ${path.basename(narr)} + ${segs.length} záběrů (${how}).`,
+      shots: segs.map((s) => `${tc(s.at).slice(3, 11)} ${path.basename(s.source).replace(/\.[^.]+$/, '').slice(-14)} @${tc(s.in).slice(3, 8)}` +
+        `${s.sentence ? ` ← V${s.sentence} ${String(byIdText[s.sentence] || '').slice(0, 50)}` : ''}`),
+    };
+  },
 );
 
 /* ------------------------------------------------------------------ Worker: mluvčí, synchronizace, porozumění, více kamer */

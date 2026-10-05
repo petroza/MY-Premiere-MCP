@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from worker.common import CONFIG, Cancelled, cache_dir, log, original_media, read_json, read_token, write_json  # noqa: E402
-from worker import analysis, asr, audiosync, diarize, frame, gpu, media  # noqa: E402
+from worker import analysis, asr, audiosync, broll, diarize, frame, gpu, media  # noqa: E402
 
 VERSION = "0.2.0"
 HANDLERS = {
@@ -39,6 +39,9 @@ HANDLERS = {
     "frame": frame.get_frame,
     "describe_frame": frame.describe_frame,
     "prepare_media": media.prepare,
+    "broll_index": broll.index,
+    "broll_plan": broll.plan,
+    "media_info": broll.media_info,
 }
 TOKEN = read_token()
 JOBS_DIR = cache_dir("jobs")

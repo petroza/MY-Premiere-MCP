@@ -61,13 +61,53 @@ try {
 
   // zdroj: médium z aktivní sekvence, jinak jediné video v projektu
   let source = null;
+  let seq = null;
   try {
-    const seq = JSON.parse(await call('get_sequence', {}));
+    seq = JSON.parse(await call('get_sequence', {}));
     source = (seq.clips || []).find((x) => x.mediaPath)?.mediaPath || null;
-    if (source) say(`⚙ zdroj z aktivní sekvence „${seq.name}": ${path.basename(source)}`);
   } catch {
     /* bez aktivní sekvence */
   }
+
+  // Dabing / dodatečně namluvený komentář: řeč je na samostatné zvukové stopě a obraz jsou záznamy bez řeči.
+  // Běžný střih by vzal za zdroj záznam obrazovky a vybral „0 vět“ (prezentace 2026-10-05) – tady se naopak
+  // pod komentář skládá obraz.
+  if (seq) {
+    const vids = [...new Set(seq.clips.filter((x) => x.kind === 'video' && x.mediaPath).map((x) => x.mediaPath))];
+    const narr = seq.clips.filter((x) => x.kind === 'audio' && x.mediaPath && !vids.includes(x.mediaPath))
+      .sort((a, b) => b.end - b.start - (a.end - a.start))[0];
+    if (narr && vids.length) {
+      let voiceover = /koment|dabing|voice.?over|namluv|mluvím|mluvim|podlo[žz]|odpovídal|odpovidal/i.test(instruction);
+      if (!voiceover) {
+        // obraz bez řeči -> komentář je jediná řeč v sekvenci
+        let words = 0;
+        for (const v of vids) {
+          const t = await call('transcribe_media', { path: v, maxChars: 1 });
+          words += Number((t.match(/(\d+)\s+slov/) || [])[1] || 0);
+        }
+        voiceover = words < 20;
+      }
+      if (voiceover) {
+        let last = -1;
+        const progress = (p) => {
+          if ((p.progress || 0) - last >= 0.1 || p.progress >= 1) {
+            last = p.progress || 0;
+            say(`   ${Math.round(last * 100)} % ${p.message || ''}`);
+          }
+        };
+        say(`⚙ komentář na samostatné stopě: ${path.basename(narr.mediaPath)} – skládám pod něj obraz z ${vids.length} záznamů`);
+        say('⚙ popis záběrů lokálním modelem (poprvé u dlouhých záznamů minuty, pak z cache) a přiřazení k větám');
+        const r = JSON.parse(await call('build_voiceover_sequence', {
+          name: `KOMENTÁŘ + OBRAZ ${BACKEND.toUpperCase()} ${new Date().toTimeString().slice(0, 5)}`, backend: BACKEND,
+        }, progress));
+        say(`✔ ${r.summary}`);
+        for (const s of r.shots || []) say(`   ${s}`);
+        await c.close();
+        process.exit(0);
+      }
+    }
+  }
+  if (source) say(`⚙ zdroj z aktivní sekvence „${seq.name}": ${path.basename(source)}`);
   if (!source) {
     const items = JSON.parse(await call('list_project_items', {}));
     const vids = items.filter((i) => /\.(mp4|mov|mxf|mkv|avi|wav|mp3|m4a)$/i.test(i.mediaPath || ''));

@@ -47,6 +47,18 @@ Ovládáš Adobe Premiere Pro přes MCP server `premiere`. Uživatel píše čes
 3. Lze kombinovat se střihem příběhu: `picks` (ID vět reference) → kamery se přepínají jen ve vybraných úsecích.
 4. `detect_scene_cuts` najde skutečné vizuální střihy kamer zapečené uvnitř jednoho zdrojového souboru (ne podle zvuku). Jako obecný nástroj na hledání řezů volej jen na výslovné přání (např. "najdi řezy kamer v tomhle záznamu") – vytvoří dočasnou sekvenci, u dlouhého úseku může trvat přes minutu. Proaktivní použití u krátkých sestřihů ze zpravodajského materiálu viz bod 6 výš v "Postup střihu podle obsahu".
 
+## Dabing / dodatečně namluvený komentář (obraz pod komentář)
+Když je řeč jen na samostatné zvukové stopě (komentář namluvený dodatečně) a obraz jsou záznamy bez řeči
+(záznam obrazovky, b-roll), NEstříhej podle řeči ve videu – tam žádná není. Postup:
+1. `transcribe_media` komentáře (zvuk ze sekvence) – věty s časy.
+2. `index_broll` (bez `paths` = obrazové zdroje z aktivní sekvence; další záznamy přidej do `paths`).
+   Když vidíš obrázky, dej `sheets: true` (a klidně `describe: false`) a archy si prohlédni sám – přesnější než popis.
+3. Ke každé větě vyber záběr, který ukazuje přesně to, o čem věta mluví; dlouhé věty a výčty („stovky variant“)
+   rozděl na víc různých záběrů; nepoužívej stejné místo dvakrát; drž logiku děje (zadání → práce → výsledek).
+4. `build_voiceover_sequence` se `segments` (`source`, `in` = čas ve zdroji, `sentence` = ID věty, nebo `at` = čas
+   v komentáři pro další záběr uvnitř dlouhé věty) – NOVÁ sekvence, komentář beze změny, střih těsně před větou.
+   Bez `segments` to udělá lokální model sám (pomalejší, méně přesné).
+
 ## Pravidla
 - Časy jsou v sekundách. Časy přepisu jsou ve zdroji, `transcribe_sequence` vrací časy timeline.
 - Destruktivní nástroje (`remove_timeline_ranges`, `remove_clips`) jen na výslovné přání – a předtím vždy zavolej `backup_project` (tlačítko "↶ Zpět" v panelu není spolehlivé, viz jeho popis).
