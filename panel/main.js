@@ -276,6 +276,22 @@
       Array.prototype.join.call(ev.dataTransfer.types || [], ', ') + ') – použij tlačítko Vložit video…', 'err');
   });
 
+  // Zastavit vše: Hermes (i z jiné instalace), lokální modely a Worker zabírají grafiku a RAM – dva Hermesy naráz
+  // vzaly 11,8 z 12,3 GB grafiky a Premiere se 4K záznamy sekala celý počítač (2026-10-05).
+  $('stopAll').addEventListener('click', function () {
+    if (child) { stopAgent(); out('■ úloha zastavena', 'dim'); }
+    out('› Zastavit AI procesy (Hermes, modely, Worker)', 'me');
+    var p = cp.spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+      path.join(ROOT, 'scripts', 'stop-all.ps1')], { windowsHide: true });
+    var buf = '';
+    p.stdout.setEncoding('utf8');
+    p.stdout.on('data', function (d) { buf += d; });
+    p.on('error', function (e) { out('✖ ' + e.message, 'err'); });
+    p.on('close', function () {
+      buf.split(/\r?\n/).filter(Boolean).forEach(function (l) { out(l, /^Zastaveno|^Grafika/.test(l) ? 'ai' : 'dim'); });
+    });
+  });
+
   $('undo').addEventListener('click', function () {
     if (child) { out('Nejdřív počkej, až agent doběhne (nebo klikni Stop).', 'err'); return; }
     // DŮLEŽITÉ: Premiere/QE undo pracuje po jednotlivých vnitřních krocích (např. samostatně

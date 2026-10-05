@@ -54,6 +54,15 @@ if ($Vize -and -not (Test-Path $mmproj)) { throw "Chybi mmproj pro videni: $mmpr
 
 Stop-Hermes
 Start-Sleep -Seconds 1
+# Port uz drzi jiny server (napr. Hermes z O:\Hermes): druhy 35B model by se nacetl do grafiky a RAM, port by
+# nedostal a jen by zabiral misto - dva Hermesy naraz zablokovaly Premiere i cely pocitac (2026-10-05).
+$busy = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($busy) {
+    $other = Get-CimInstance Win32_Process -Filter "ProcessId=$($busy.OwningProcess)"
+    Write-Host "Port $Port uz pouziva jiny server: $($other.ExecutablePath) (pid $($busy.OwningProcess))." -ForegroundColor Yellow
+    Write-Host 'Druheho Hermese nespoustim. Zastav ho (panel: Zastavit AI, nebo scripts\stop-all.ps1) a spust znovu.' -ForegroundColor Yellow
+    exit 2
+}
 New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 
 # -a dflash: alias modelu, na ktery se odkazuje config.json (llmBackends.hermes.model)
@@ -74,7 +83,10 @@ Write-Host "Startuji Hermese $rezim na portu $Port - model se nacita..."
 for ($i = 0; $i -lt 180; $i++) {
     Start-Sleep -Seconds 2
     try {
-        if ((Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 2).status -eq 'ok') {
+        # odpovidat musi NAS proces (drive hlasil "pripraveny", i kdyz na portu odpovidal jiny Hermes)
+        $own = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).Path -eq $server }
+        if ($own -and (Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 2).status -eq 'ok') {
             Write-Host "Hermes je pripraveny (http://127.0.0.1:$Port)." -ForegroundColor Green
             exit 0
         }

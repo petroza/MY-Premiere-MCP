@@ -1187,3 +1187,14 @@ Uživatel nahrál 4K plochu (After Effects + Premiere přes Claude), pak v Premi
 - Návod pro agenty: CLAUDE.md, AGENTS.md, panel/agent-system.md, instrukce MCP serveru.
 Ověřeno: agentní cesta (Claude, 22 segmentů) → „PREZENTACE – obraz podle komentáře“ 2:16,36; automatická (Hermes)
 → 22 záběrů ze 3 záznamů, 26 s z cache (popis 75 záběrů poprvé ~9 min; Hermes jednou timeoutoval → Qwen3-VL).
+
+### 23. Sekání Premiery a celého PC: dva Hermesy naráz (2026-10-05)
+
+Diagnóza: Hermes z `O:\Hermes` (autostart „Hermes lokální AI.lnk“ ve Startup, port 8000, s mmproj) + Hermes z projektu,
+který jsem spustil `hermes.ps1 start -Vize` – port nedostal, ale model si natáhl (16 GB RAM). Grafika 11,8/12,3 GB,
+Premiere (4K záznamy) měla 2,2 GB a vytěžovala GPU na 95 % → sekání. `hermes.ps1 start` hlásil „připraven“,
+protože odpovídal ten cizí; `stop` zabíjí jen svou kopii. Po zastavení: grafika 2,6 GB, Premiere odpovídá, GPU 0 %.
+Opravy: `hermes.ps1 start` nespustí druhý server, když port drží jiný proces (exit 2), a „připraven“ hlásí jen
+když odpovídá jeho vlastní proces. Nové `scripts/stop-all.ps1` + tlačítko „⏹ Zastavit AI“ v panelu (řádek Workeru):
+zastaví všechny llama-server (i O:\Hermes) a Worker, vypíše co a kolik grafiky zbylo. Autostart O:\Hermes nemazáno
+(uživatelova konfigurace) – doporučit vypnout, když se pracuje v Premiere.
