@@ -114,6 +114,7 @@ def whisper(name: str | None = None):
         # na CPU – jinak by se model načítal znovu při každém přepisu
         if _whisper is not None and _whisper_key[0] == source and _whisper_key[1] in (w["device"], "cpu"):
             return _whisper, _whisper_key[1]
+        stop_owned_hermes("přepis potřebuje grafiku")  # 35B model + Whisper se do 12 GB nevejdou (přepis visel na 4 %)
         _free_llm()
         _free_vision()
         _free_whisper()
@@ -277,6 +278,97 @@ def llm_backends() -> dict:
 _backend_cache: tuple[float, list[dict]] = (0.0, [])
 
 
+# ---------------------------------------------------------------- Hermes na požádání
+# Hermes (35B) drží ~9 GB grafiky. Když běžel trvale (autostart), Premiere se 4K záznamy měla 2 GB a sekal se celý
+# počítač (2026-10-05). Worker ho proto spouští, jen když ho úloha potřebuje, a po nečinnosti sám vypne. Hermese
+# spuštěného ručně (ne Workerem) nevypíná – ten patří uživateli.
+_hermes_owned = False
+_hermes_last = 0.0
+
+
+def _hermes_ready(b: dict) -> bool:
+    try:
+        with urllib.request.urlopen(str(b["url"]).rstrip("/") + "/health", timeout=0.6) as r:
+            return json.loads(r.read() or b"{}").get("status") == "ok"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _hermes_script(b: dict, action: str, *extra: str) -> None:
+    # bez zachytávání výstupu: llama-server spuštěný přes Start-Process by zdědil rouru a čekání by nikdy neskončilo
+    subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / b["start"]), action, *extra],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=480,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def hermes_touch() -> None:
+    global _hermes_last
+    _hermes_last = time.time()
+
+
+def ensure_hermes() -> bool:
+    """Hermes běží (případně ho spustí s viděním – hodí se na text i obraz). False = není nainstalovaný / nejde."""
+    global _hermes_owned, _backend_cache
+    b = llm_backends().get("hermes")
+    if not b:
+        return False
+    if _hermes_ready(b):
+        hermes_touch()
+        return True
+    if b.get("autoStart") is False or not b.get("start") or not (ROOT / str(b.get("modelFile", ""))).exists():
+        return False
+    with _lock:
+        _free_whisper()  # Whisper na GPU by se s 35B modelem do 12 GB nevešel
+        _free_llm()
+        _free_vision()
+    log("GPU: spouštím Hermese na požádání (s viděním)")
+    t0 = time.time()
+    try:
+        _hermes_script(b, "start", "-Vize")
+    except Exception as e:  # noqa: BLE001
+        log(f"GPU: Hermes se nespustil: {e}")
+    _backend_cache = (0.0, [])
+    if _hermes_ready(b):
+        _hermes_owned = True
+        hermes_touch()
+        log(f"GPU: Hermes připraven za {time.time() - t0:.0f} s")
+        return True
+    log("GPU: Hermes nenaběhl – pokračuji s vlastním modelem")
+    return False
+
+
+def stop_owned_hermes(reason: str) -> None:
+    """Vypne Hermese, kterého spustil Worker (ručně spuštěného nechá být)."""
+    global _hermes_owned, _backend_cache
+    if not _hermes_owned:
+        return
+    b = llm_backends().get("hermes") or {}
+    try:
+        _hermes_script(b, "stop")
+    except Exception as e:  # noqa: BLE001
+        log(f"GPU: zastavení Hermese selhalo: {e}")
+    _hermes_owned = False
+    _backend_cache = (0.0, [])
+    log(f"GPU: Hermes vypnut ({reason}) – grafika a paměť uvolněny")
+
+
+def hermes_idle_check(busy: bool) -> None:
+    """Volá Worker pravidelně: po nečinnosti (výchozí 5 min) Hermese spuštěného Workerem vypne."""
+    idle = float((llm_backends().get("hermes") or {}).get("idleStopSec", 300))
+    if _hermes_owned and not busy and time.time() - _hermes_last > idle:
+        stop_owned_hermes(f"{idle / 60:.0f} min bez úlohy")
+
+
+def auto_backend() -> str:
+    """Backend „auto“: běžící externí model (Hermes), jinak ho spustit na požádání, jinak vlastní model."""
+    for b in backend_status(max_age=0):
+        if b["name"] != "local" and b["running"]:
+            if b["name"] == "hermes":
+                hermes_touch()
+            return b["name"]
+    return "hermes" if ensure_hermes() else "local"
+
+
 def backend_status(max_age: float = 15.0) -> list[dict]:
     """Pro worker_status: co je nakonfigurované a jestli to zrovna běží.
 
@@ -320,6 +412,8 @@ def stats_summary(calls: list[dict]) -> dict:
 def chat_json(prompt: str, max_tokens: int = 1500, schema: dict | None = None, backend: str | None = None) -> dict:
     ext = None
     if backend and backend != "local":
+        if backend == "hermes" and not ensure_hermes():  # panel posílá "hermes" napřímo – spustit na požádání
+            raise RuntimeError("Hermes neběží a nepodařilo se ho spustit (scripts\\hermes.ps1 start, viz cache\\hermes\\llama-server.log).")
         ext = llm_backends().get(backend)
         if not ext:
             raise RuntimeError(f"Neznámý LLM backend '{backend}'. Dostupné: local, " + ", ".join(llm_backends()) or "local")

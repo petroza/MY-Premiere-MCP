@@ -1198,3 +1198,16 @@ Opravy: `hermes.ps1 start` nespustí druhý server, když port drží jiný proc
 když odpovídá jeho vlastní proces. Nové `scripts/stop-all.ps1` + tlačítko „⏹ Zastavit AI“ v panelu (řádek Workeru):
 zastaví všechny llama-server (i O:\Hermes) a Worker, vypíše co a kolik grafiky zbylo. Autostart O:\Hermes nemazáno
 (uživatelova konfigurace) – doporučit vypnout, když se pracuje v Premiere.
+
+### 24. Hermes na požádání + vypnutý autostart (2026-10-05)
+
+Uživatel: Hermes ani Ollama se nemají spouštět sami po přihlášení → zástupci „Hermes lokální AI.lnk“ a „Ollama.lnk“
+přesunuti ze Startup do Start › Programy › „Vypnutý autostart“ (nesmazáno, jiné autostarty nemají).
+Worker teď Hermese řídí sám (`gpu.ensure_hermes / stop_owned_hermes / hermes_idle_check / auto_backend`):
+- spustí ho na požádání (`hermes.ps1 start -Vize`, výstup NE do roury – zdědil by ji llama-server a čekání by
+  nekončilo), když úloha potřebuje LLM (auto i výslovné `backend: "hermes"` z panelu), předtím uvolní Whisper;
+- po nečinnosti `llmBackends.hermes.idleStopSec` (120 s) ho vypne (vlákno `_hermes_watch` ve worker/server.py);
+- před načtením Whisperu ho vypne (35B + Whisper se do 12 GB nevejdou – přepis dřív visel na 4 %);
+- ručně spuštěného (ne Workerem) se nedotýká; `autoStart: false` = jen ručně.
+Ověřeno: start na požádání 9–12 s (model v cache OS), plán 42 s; po 60 s nečinnosti vypnut (grafika 10,4 → 1,1 GB);
+přepis vypnul Hermese a proběhl za 8 s. `stop-all.ps1` zastaví i Ollamu.

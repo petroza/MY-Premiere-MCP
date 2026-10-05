@@ -116,7 +116,7 @@ def translate(params: dict, ctx) -> dict:
     target = params.get("target") or "cs"
     backend = params.get("backend") or "auto"
     if backend == "auto":
-        backend = next((b["name"] for b in gpu.backend_status() if b["name"] != "local" and b["running"]), "local")
+        backend = gpu.auto_backend()
     gpu.CALL_STATS.clear()
     gpu.STAT_PHASE = "translate"
     name = _LANG_NAMES.get(target, target)
@@ -283,7 +283,7 @@ def analyze(params: dict, ctx) -> dict:
     use_llm = params.get("llm", True)
     backend = params.get("backend") or "auto"
     if backend == "auto":  # Hermes, když běží (vedle něj se vlastní gemma3 do VRAM nevejde a běží pomalu)
-        backend = next((b["name"] for b in gpu.backend_status() if b["name"] != "local" and b["running"]), "local")
+        backend = gpu.auto_backend()
     out = cache_file("analysis", path, {"tr": tr_file, "n": len(segs), "llm": use_llm,
                                          "spk": tr.get("speakerSource"), "be": backend, "v": 2})
     if out.exists() and not params.get("force"):
@@ -489,7 +489,7 @@ def plan_edit(params: dict, ctx) -> dict:
     target = float(params.get("targetSec") or 0)
     backend = params.get("backend") or "auto"
     if backend == "auto":  # Hermes (externí, rychlejší a přesnější), když běží; jinak vlastní model
-        backend = next((b["name"] for b in gpu.backend_status() if b["name"] != "local" and b["running"]), "local")
+        backend = gpu.auto_backend()
     t_start = time.time()
     gpu.CALL_STATS.clear()
     tr, _ = load_transcript(path)

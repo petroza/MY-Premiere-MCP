@@ -44,7 +44,9 @@
       "modelFile": "models/hermes/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf",
       "mmproj": "models/hermes/mmproj-Qwen3.6-35B-A3B-F16.gguf",
       "start": "scripts/hermes.ps1",
-      "note": "Model i llama.cpp jsou ve složce projektu. Spouští se ručně: scripts\\hermes.ps1 start (nebo -Vize). Worker ho sám nespouští ani nevypíná a nesahá kvůli němu na GPU – pořadí načítání modelů na 12GB GPU by se jinak pralo s Whisperem."
+      "autoStart": true,
+      "idleStopSec": 120,
+      "note": "Model i llama.cpp jsou ve složce projektu. Worker Hermese spouští na požádání (plán, osnova, překlad, popis záběrů) a po nečinnosti (idleStopSec) sám vypíná – uvolní grafiku pro Premiere; před přepisem (Whisper) ho vypne taky. Ručně spuštěného (scripts\\hermes.ps1 start) nevypíná. autoStart: false = jen ručně."
     }
   },
   "llmVision": {

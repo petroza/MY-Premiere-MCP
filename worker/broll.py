@@ -75,10 +75,8 @@ def _sample(path: str, step: float, out_dir: Path, ctx, p0: float, p1: float) ->
 
 def _vision_backend() -> tuple[str, dict] | None:
     """Běžící externí backend (Hermes) – jestli umí obrázky, se pozná až prvním pokusem."""
-    for b in gpu.backend_status():
-        if b["name"] != "local" and b.get("running"):
-            return b["name"], gpu.llm_backends().get(b["name"], {})
-    return None
+    name = gpu.auto_backend()  # Hermes se případně spustí na požádání (s viděním)
+    return (name, gpu.llm_backends().get(name, {})) if name != "local" else None
 
 
 def _describe_ext(cfg: dict, image: str) -> str:
@@ -199,7 +197,7 @@ def plan(params: dict, ctx) -> dict:
     total = float(params.get("duration") or (sents[-1]["end"] if sents else 0))
     backend = params.get("backend") or "auto"
     if backend == "auto":
-        backend = next((b["name"] for b in gpu.backend_status() if b["name"] != "local" and b["running"]), "local")
+        backend = gpu.auto_backend()
     shot_lines = [f"S{s['id']} [{Path(s['source']).stem[-8:]} {s['from']:.0f}–{s['to']:.0f} s]: {s.get('desc') or '?'}"
                   for s in params["shots"]]
     sent_lines = [f"V{s['id']} ({s['start']:.1f}–{s['end']:.1f} s, {s['end'] - s['start']:.0f} s): {s['text'].strip()}"

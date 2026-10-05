@@ -37,7 +37,7 @@ Ovládáš Adobe Premiere Pro přes MCP server `premiere`. Uživatel píše čes
 3. Plný text čti jen u kapitol, které do střihu patří: `get_transcript` s `fromId`/`toId` a `format: "compact"`.
 4. Sestřih podle obsahu (verze na X minut o tématu): `plan_edit_local` s `format: "review"` – lokální model navrhne
    věty i náhradníky, ty návrh jen zkontroluješ a postavíš. Změřeno: ~4× levnější než vlastní čtení kapitol, kvalita stejná.
-   `backend` vynech (auto = Hermes, když běží) a `instruction` předej doslova, jak ho napsal uživatel.
+   `backend` vynech (auto = Hermes – Worker ho sám spustí a po nečinnosti vypne) a `instruction` předej doslova, jak ho napsal uživatel.
 5. Chce-li uživatel střih úplně bez kreditů: `plan_edit_local` s `build`.
 
 ## Více kamer

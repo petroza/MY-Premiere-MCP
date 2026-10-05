@@ -134,6 +134,20 @@ class Store:
 STORE = Store()
 
 
+def _hermes_watch() -> None:
+    """Hermese spuštěného Workerem na požádání po nečinnosti vypne (gpu.hermes_idle_check) – uvolní grafiku pro Premiere."""
+    while True:
+        time.sleep(20)
+        try:
+            busy = any(j["status"] in ("queued", "running") for j in list(STORE.jobs.values()))
+            gpu.hermes_idle_check(busy)
+        except Exception as e:  # noqa: BLE001
+            log(f"hlídání Hermese: {e}")
+
+
+threading.Thread(target=_hermes_watch, daemon=True).start()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "MYpremiereWorker/" + VERSION
 
