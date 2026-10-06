@@ -1221,3 +1221,8 @@ oficiálním odkazem `claude://code/new?q=…&folder=<ROOT>` (support.claude.com
 `rundll32 url.dll,FileProtocolHandler` (bez cmd.exe kvůli & a %) – nová relace Claude Code ve složce pluginu
 s předvyplněným zadáním; uživatel potvrdí složku a Enter. Interní přihlášení aplikace se NEPOUŽÍVÁ (obcházelo by
 pravidlo organizace). Po chybě organizace panel nabídne tlačítka: aplikace Claude / Hermes / Codex.
+- Indikátor „● Claude připojen / ○ Připojit Claude“ v hlavičce panelu: MCP server po `oninitialized` posílá panelu
+  každých 10 s `/hello` (jméno klienta z MCP initialize + CLAUDE_CODE_ENTRYPOINT + pid); panel drží klienty 25 s.
+  Klik na šedý otevře v aplikaci relaci „připoj se k Premiere“ (claude://code/new). Pomocné běhy panelu
+  (run-tool, local-edit) se nezapočítávají. Ověřeno: simulovaná relace → zelený za ~6 s; skutečná relace aplikace
+  Claude spuštěná po úpravě serveru → zelený. Starší relace (server spuštěný před úpravou) se nehlásí.

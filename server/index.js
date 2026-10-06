@@ -2218,4 +2218,15 @@ tool(
   },
 );
 
+// „Jsem tu“ pro panel: indikátor „Claude“ v hlavičce panelu ukáže, že aplikace Claude (nebo Codex…) má plugin
+// připojený – server běží po celou dobu jejich relace. Každých 10 s, chyby (panel neběží) se ignorují.
+server.server.oninitialized = () => {
+  const ci = server.server.getClientVersion?.() || {};
+  const hello = () =>
+    bridge('/hello', { client: ci.name || '?', version: ci.version || '', entry: process.env.CLAUDE_CODE_ENTRYPOINT || '', pid: process.pid }, 3000)
+      .catch(() => {});
+  hello();
+  setInterval(hello, 10000).unref();
+};
+
 await server.connect(new StdioServerTransport());

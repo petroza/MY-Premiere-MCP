@@ -25,6 +25,7 @@
 
   var $ = function (id) { return document.getElementById(id); };
   var pocet = 0;
+  var clients = {}; // pid MCP serveru -> kdo ho používá (hlásí se přes /hello)
   $('port').textContent = PORT;
 
   function log(msg) {
@@ -137,6 +138,12 @@
     req.on('end', function () {
       var data;
       try { data = JSON.parse(body || '{}'); } catch (e) { return send(400, { error: 'bad json' }); }
+      if (req.url === '/hello') {
+        // MCP server pluginu hlásí, kdo ho používá (aplikace Claude, Codex…) – pro indikátor „Claude“ v hlavičce
+        clients[String(data.pid)] = { client: String(data.client || '?'), entry: String(data.entry || ''), last: Date.now() };
+        updateClaudeLink();
+        return send(200, { raw: JSON.stringify({ ok: true }) });
+      }
       pocet++;
       $('pocet').textContent = pocet;
       var code;
@@ -367,6 +374,54 @@
     outEl.appendChild(div);
     outEl.scrollTop = outEl.scrollHeight;
   }
+
+  // Indikátor „Claude“ v hlavičce: zelený, když má aplikace Claude plugin připojený (její MCP server se každých
+  // 10 s hlásí přes /hello). Šedý = nepřipojeno; kliknutí otevře v aplikaci novou relaci, která se připojí.
+  function clientLabel(c) {
+    if (/^(run-tool|local-edit|claude-analyza)$/.test(c.client)) return null; // krátké pomocné běhy panelu
+    if (c.entry === 'claude-desktop' || /claude/i.test(c.client)) return 'Claude';
+    if (/codex/i.test(c.client)) return 'Codex';
+    return c.client;
+  }
+  function connectedClients() {
+    var now = Date.now(), count = {};
+    Object.keys(clients).forEach(function (k) {
+      if (now - clients[k].last > 25000) { delete clients[k]; return; }
+      var l = clientLabel(clients[k]);
+      if (l) count[l] = (count[l] || 0) + 1;
+    });
+    return Object.keys(count).map(function (l) { return count[l] > 1 ? l + ' (' + count[l] + ' relace)' : l; });
+  }
+  function updateClaudeLink() {
+    var el = $('claudeLink');
+    if (!el) return;
+    var list = connectedClients();
+    var on = list.some(function (l) { return /^Claude/.test(l); });
+    el.classList.toggle('on', on);
+    el.textContent = on ? '● Claude připojen' : '○ Připojit Claude';
+    el.title = on
+      ? 'Připojeno: ' + list.join(', ') + ' – Claude teď může ovládat Premiere přes plugin. Zadání piš v aplikaci Claude.'
+      : 'Aplikace Claude není připojená – klikni: otevře se v ní relace pluginu, odešli Enterem a do pár sekund se připojí.' +
+        (list.length ? ' (připojeno: ' + list.join(', ') + ')' : '');
+  }
+  setInterval(updateClaudeLink, 5000);
+  $('claudeLink').addEventListener('click', function () {
+    var list = connectedClients();
+    if (list.some(function (l) { return /^Claude/.test(l); })) {
+      out('Připojeno: ' + list.join(', ') + ' – zadání piš v aplikaci Claude, ovládá Premiere přes plugin.', 'dim');
+      return;
+    }
+    var q = 'Připoj se k Premiere přes MCP server premiere: zavolej premiere_status, napiš mi název projektu a aktivní ' +
+      'sekvence a čekej na moje zadání. Pracuj podle CLAUDE.md.';
+    try {
+      cp.spawn('rundll32.exe', ['url.dll,FileProtocolHandler',
+        'claude://code/new?q=' + encodeURIComponent(q) + '&folder=' + encodeURIComponent(ROOT)],
+        { detached: true, windowsHide: true }).unref();
+      out('⚙ V aplikaci Claude se otevřela relace pluginu – potvrď složku a odešli Enterem. Indikátor zezelená, až se připojí.', 'dim');
+    } catch (e) {
+      out('✖ Aplikaci Claude se nepodařilo otevřít: ' + e.message, 'err');
+    }
+  });
 
   // tlačítko ve výpisu: stejné zadání znovu s jiným agentem (když Claude Code nejde kvůli účtu)
   var lastPrompt = '';

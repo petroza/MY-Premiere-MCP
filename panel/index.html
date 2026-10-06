@@ -43,6 +43,8 @@
   #out:not(.show-tools) .tool { display:none; }
   details { color:var(--dim); } details pre { max-height:120px; overflow:auto; margin:4px 0 0; white-space:pre-wrap; }
   .grow { flex:1; }
+  .pill { border-radius:10px; padding:1px 9px; font-size:11px; color:var(--dim); }
+  .pill.on { color:var(--ok); border-color:var(--ok); }
   .actions { display:flex; gap:6px; margin-left:auto; }
   #dropRow { border:1px dashed transparent; border-radius:4px; padding:2px; margin:-3px; }
   #dropRow.drag { border-color:var(--accent); background:rgba(111,140,255,.12); }
@@ -52,6 +54,7 @@
   <header>
     <span id="dot" class="dot"></span>
     <h1>MY Premiere MCP</h1>
+    <button id="claudeLink" class="pill" title="Stav připojení aplikace Claude k pluginu">○ Připojit Claude</button>
     <span id="stav">startuji…</span>
     <span id="aiClaude" class="ai-icon" title="Claude pracuje">
       <svg viewBox="0 0 24 24" width="15" height="15">
