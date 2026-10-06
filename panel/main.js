@@ -562,8 +562,9 @@
       // Firemní účet (TV Nova) má Claude Code přes předplatné zakázané – nejde to obejít, jen API klíč nebo správce.
       // Místo slepé uličky rovnou nabídnout totéž zadání v Hermesovi (lokálně, zdarma).
       if (ev.is_error && /disabled Claude subscription access|organization has disabled/i.test(String(ev.result || ''))) {
-        out('Claude Code tu nejde: organizace má přístup přes předplatné vypnutý (API klíč nebo povolení od správce). ' +
-          'Můžeš zadání pustit v Hermesovi, nebo v Codexu (GPT).', 'err');
+        out('Příkazový Claude Code tu nejde: organizace má přístup přes předplatné vypnutý. Aplikace Claude ale ' +
+          'povolená je – vyber agenta „Claude (aplikace)“, nebo pusť zadání v Hermesovi či Codexu.', 'err');
+        offerRerun('claudeapp', '▶ Poslat do aplikace Claude');
         offerRerun('hermes', '▶ Spustit totéž v Hermesovi (lokálně, zdarma)');
         offerRerun('codex', '▶ Spustit totéž v Codexu (GPT)');
       }
@@ -600,10 +601,30 @@
     else if (t === 'task_complete') out('✔ hotovo', 'dim');
   }
 
+  // „Claude (aplikace)“: zadání se předá desktopové aplikaci Claude odkazem claude://code/new (oficiální, viz
+  // support.claude.com 14729294) – nová relace Claude Code ve složce pluginu s předvyplněným zadáním, stačí Enter.
+  // Firemní účet má zakázaný příkazový `claude` (panel), aplikace ale povolená je – ruční přepínání přes chat odpadá.
+  function sendToClaudeApp(prompt) {
+    var text = prompt + '\n\n(Zadání z panelu MY Premiere MCP. Pracuj přes MCP server premiere podle CLAUDE.md – ' +
+      'nejdřív premiere_status a get_sequence na aktivní sekvenci, výsledek vždy jako NOVÁ sekvence.)';
+    var url = 'claude://code/new?q=' + encodeURIComponent(text) + '&folder=' + encodeURIComponent(ROOT);
+    out('› ' + prompt, 'me');
+    lastPrompt = prompt;
+    try {
+      // rundll32 předá URL přímo obsluze protokolu – bez cmd.exe, který by rozbil znaky & a %
+      cp.spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], { detached: true, windowsHide: true }).unref();
+      out('⚙ Zadání je v aplikaci Claude (nová relace ve složce pluginu). Potvrď složku a odešli Enterem – výsledek ' +
+        'se objeví v Premiere a průběh uvidíš v aplikaci.', 'dim');
+    } catch (e) {
+      out('✖ Aplikaci Claude se nepodařilo otevřít: ' + e.message, 'err');
+    }
+  }
+
   function runAgent() {
     var prompt = $('prompt').value.trim();
     if (!prompt || child) return;
     var agent = $('agent').value;
+    if (agent === 'claudeapp') { sendToClaudeApp(prompt); return; }
     // Hermes = lokální model uživatele (O:\Hermes, llama-server :8000). Nejede přes CLI agenta,
     // ale přes náš skript: vybere věty lokálně a rovnou postaví sekvenci - bez kreditů.
     var exe = findExe(agent === 'hermes' ? 'node' : agent);

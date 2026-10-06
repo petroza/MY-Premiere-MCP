@@ -1211,3 +1211,13 @@ Worker teď Hermese řídí sám (`gpu.ensure_hermes / stop_owned_hermes / herme
 - ručně spuštěného (ne Workerem) se nedotýká; `autoStart: false` = jen ručně.
 Ověřeno: start na požádání 9–12 s (model v cache OS), plán 42 s; po 60 s nečinnosti vypnut (grafika 10,4 → 1,1 GB);
 přepis vypnul Hermese a proběhl za 8 s. `stop-all.ps1` zastaví i Ollamu.
+
+### 25. „Claude (aplikace)“ v panelu (2026-10-06)
+
+Firemní účet (org TV Nova) má zakázaný příkazový Claude Code přes předplatné – panelový `claude -p` hlásí
+„organization has disabled Claude subscription access“ pokaždé (v září se stejným účtem fungoval → změna nastavení
+organizace). Desktopová aplikace Claude povolená je. Nový agent v panelu „Claude (aplikace)“: zadání se předá
+oficiálním odkazem `claude://code/new?q=…&folder=<ROOT>` (support.claude.com/en/articles/14729294) přes
+`rundll32 url.dll,FileProtocolHandler` (bez cmd.exe kvůli & a %) – nová relace Claude Code ve složce pluginu
+s předvyplněným zadáním; uživatel potvrdí složku a Enter. Interní přihlášení aplikace se NEPOUŽÍVÁ (obcházelo by
+pravidlo organizace). Po chybě organizace panel nabídne tlačítka: aplikace Claude / Hermes / Codex.
