@@ -368,6 +368,23 @@
     outEl.scrollTop = outEl.scrollHeight;
   }
 
+  // tlačítko ve výpisu: stejné zadání znovu s jiným agentem (když Claude Code nejde kvůli účtu)
+  var lastPrompt = '';
+  function offerRerun(agent, label) {
+    var b = document.createElement('button');
+    b.textContent = label;
+    b.style.margin = '4px 6px 2px 0';
+    b.addEventListener('click', function () {
+      if (child || !lastPrompt) return;
+      $('agent').value = agent;
+      $('agent').dispatchEvent(new Event('change'));
+      $('prompt').value = lastPrompt;
+      runAgent();
+    });
+    outEl.appendChild(b);
+    outEl.scrollTop = outEl.scrollHeight;
+  }
+
   function findExe(name) {
     try {
       var lines = cp.execSync('where.exe ' + name, { encoding: 'utf8', windowsHide: true }).split(/\r?\n/);
@@ -542,6 +559,14 @@
       if (ev.is_error && /not logged in|\/login/i.test(String(ev.result || ''))) {
         out('Claude CLI není přihlášené. V terminálu spusť: claude auth login  (a pak zadání zopakuj).', 'err');
       }
+      // Firemní účet (TV Nova) má Claude Code přes předplatné zakázané – nejde to obejít, jen API klíč nebo správce.
+      // Místo slepé uličky rovnou nabídnout totéž zadání v Hermesovi (lokálně, zdarma).
+      if (ev.is_error && /disabled Claude subscription access|organization has disabled/i.test(String(ev.result || ''))) {
+        out('Claude Code tu nejde: organizace má přístup přes předplatné vypnutý (API klíč nebo povolení od správce). ' +
+          'Můžeš zadání pustit v Hermesovi, nebo v Codexu (GPT).', 'err');
+        offerRerun('hermes', '▶ Spustit totéž v Hermesovi (lokálně, zdarma)');
+        offerRerun('codex', '▶ Spustit totéž v Codexu (GPT)');
+      }
     }
   }
 
@@ -633,6 +658,7 @@
     }
 
     out('› ' + prompt, 'me');
+    lastPrompt = prompt;
     $('run').disabled = true;
     $('undo').disabled = false; // nová akce = čerstvá historie, undo zámek z předchozí akce už neplatí
     $('stop').disabled = false;

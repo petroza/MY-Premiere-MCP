@@ -392,7 +392,9 @@ def _instruction_topics(instruction: str, backend: str) -> tuple[list[str], bool
     # Styl a forma střihu taky nejsou témata: „akční upoutávka“ dala téma „akce“ a kontrola tématu vyřadila 34 vět
     # (Robin Hood, 2026-09-29) – zbylo 37 s z 60. Upoutávka o čemkoli je výběr podle síly a tempa, ne podle obsahu.
     style = ("akc", "akčn", "akcn", "upoutáv", "upoutav", "trailer", "teaser", "promo", "dynami", "napět", "napet",
-             "napín", "napin", "tempo", "rychl", "dramat", "vtip", "humor", "emoc", "strhuj", "sestřih", "sestrih")
+             "napín", "napin", "tempo", "rychl", "dramat", "vtip", "humor", "emoc", "strhuj", "sestřih", "sestrih",
+             # „krátké střihy“ (debata, 2026-10-06) – forma střihu, ne obsah
+             "krátk", "kratk", "střih", "strih", "údern", "udern", "svižn", "svizn")
     styled = [t for t in out if any(m in _norm(t) for m in style)]
     out = [t for t in out if t not in styled]
     filtered = [t for t in out if not any(m in _norm(t) for m in meta)]
