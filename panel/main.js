@@ -614,14 +614,14 @@
       if (ev.is_error && /not logged in|\/login/i.test(String(ev.result || ''))) {
         out('Claude CLI není přihlášené. V terminálu spusť: claude auth login  (a pak zadání zopakuj).', 'err');
       }
-      // Firemní účet (TV Nova) má Claude Code přes předplatné zakázané – nejde to obejít, jen API klíč nebo správce.
-      // Místo slepé uličky rovnou nabídnout totéž zadání v Hermesovi (lokálně, zdarma).
+      // Firemní účet (TV Nova) má příkazový Claude Code přes předplatné zakázaný – obejít to nejde (jen API klíč nebo
+      // správce). Aplikace Claude povolená je: zadání se tam pošle samo a panel si to pamatuje (další už rovnou).
       if (ev.is_error && /disabled Claude subscription access|organization has disabled/i.test(String(ev.result || ''))) {
-        out('Příkazový Claude Code tu nejde: organizace má přístup přes předplatné vypnutý. Aplikace Claude ale ' +
-          'povolená je – vyber agenta „Claude (aplikace)“, nebo pusť zadání v Hermesovi či Codexu.', 'err');
-        offerRerun('claudeapp', '▶ Poslat do aplikace Claude');
-        offerRerun('hermes', '▶ Spustit totéž v Hermesovi (lokálně, zdarma)');
-        offerRerun('codex', '▶ Spustit totéž v Codexu (GPT)');
+        try { localStorage.setItem('claudeCliBlocked', String(Date.now())); } catch (e) { /* bez paměti */ }
+        out('Příkazový Claude Code je u tvého účtu zakázaný (organizace) – posílám zadání do aplikace Claude.', 'dim');
+        setTimeout(function () { if (lastPrompt) sendToClaudeApp(lastPrompt); }, 300);
+        offerRerun('hermes', '▶ Místo toho v Hermesovi (lokálně, zdarma)');
+        offerRerun('codex', '▶ Místo toho v Codexu (GPT)');
       }
     }
   }
@@ -680,6 +680,17 @@
     if (!prompt || child) return;
     var agent = $('agent').value;
     if (agent === 'claudeapp') { sendToClaudeApp(prompt); return; }
+    // Příkazový Claude je u účtu zakázaný (organizace) -> rovnou do aplikace Claude. Jednou za 24 h se CLI zkusí
+    // znovu, kdyby ho správce povolil (při chybě se zadání do aplikace pošle stejně samo).
+    if (agent === 'claude') {
+      var blockedAt = 0;
+      try { blockedAt = Number(localStorage.getItem('claudeCliBlocked') || 0); } catch (e) { /* bez paměti */ }
+      if (blockedAt && Date.now() - blockedAt < 24 * 3600 * 1000) {
+        out('ℹ Příkazový Claude Code je u tvého účtu zakázaný – zadání jde do aplikace Claude.', 'dim');
+        sendToClaudeApp(prompt);
+        return;
+      }
+    }
     // Hermes = lokální model uživatele (O:\Hermes, llama-server :8000). Nejede přes CLI agenta,
     // ale přes náš skript: vybere věty lokálně a rovnou postaví sekvenci - bez kreditů.
     var exe = findExe(agent === 'hermes' ? 'node' : agent);
