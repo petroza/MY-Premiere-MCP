@@ -1,8 +1,8 @@
 {
   "name": "my-premiere-mcp",
   "displayName": "MY Premiere MCP",
-  "version": "1.0.0",
-  "description": "Střih v Adobe Premiere Pro přes MCP server MY Premiere MCP: návod ke střihu podle obsahu, titulky, více kamer, obraz pod komentář, a napojení na panel v Premiere (/my-premiere-mcp:panel).",
+  "version": "1.1.0",
+  "description": "Střih v Adobe Premiere Pro přes MCP server MY Premiere MCP: návod ke střihu podle obsahu, titulky, více kamer, obraz pod komentář, napojení na panel v Premiere (/my-premiere-mcp:panel) a instalace na dalším počítači (/my-premiere-mcp:install).",
   "author": {
     "name": "petroza",
     "url": "https://github.com/petroza/MY-Premiere-MCP"

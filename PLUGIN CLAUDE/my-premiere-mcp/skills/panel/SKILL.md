@@ -1,5 +1,6 @@
 ---
-description: Napojí tuhle relaci na panel MY Premiere MCP – zadání napsaná v panelu v Premiere se provádějí tady
+name: panel
+description: Napojí tuhle relaci na panel MY Premiere MCP – zadání napsaná v panelu v Premiere se provádějí tady. Použij, když uživatel chce pracovat přes panel v Premiere.
 ---
 
 Napoj se na panel MY Premiere MCP v Premiere a pracuj jako jeho střihač:

@@ -1240,3 +1240,14 @@ Ověřeno simulací relace aplikace (claude-code + claude-desktop): zadání př
 - `PLUGIN CLAUDE/`: `scripts/build-claude-plugin.py` → plugin `my-premiere-mcp` (skill `premiere-strih` z CLAUDE.md
   + příkaz `/my-premiere-mcp:panel`) a `my-premiere-mcp.zip` pro Settings › Plugins › Upload. `claude plugin validate`
   → Validation passed. MCP server v pluginu záměrně není (registruje instalátor, běžel by dvakrát).
+
+### 27. Přenos na jiný počítač (flash disk) + plugin 1.1 (2026-10-06)
+
+- Plugin `my-premiere-mcp` 1.1.0: příkazy převedené na skilly (`skills/panel`, nový `skills/install`; aplikace hlásila
+  zastaralý formát `commands/`), MCP server `premiere` přes `.mcp.json` → `server/start.mjs` (= `scripts/plugin-start.mjs`,
+  bez závislostí). Spouštěč hledá složku: `MYPREMIEREMCP_ROOT` → `%APPDATA%\MYpremiereMCP\root.txt` → `X:\MYpremiereMCP`
+  na všech discích → `~\MYpremiereMCP`. Když `~/.claude.json` už má server `premiere` (instalátor), odpoví prázdným MCP
+  serverem (nástroje by jinak byly dvakrát); když složku nenajde, prázdný server s pokynem spustit `/my-premiere-mcp:install`.
+  Ověřeno MCP klientem: registrovaný → 0 nástrojů; bez registrace → 47 nástrojů; bez složky → pokyn. Validace prošla.
+- `INSTALL/install.ps1`: přeskočí `npm install`, když `node_modules` obsahuje SDK a zod (přenesená složka); `.venv`
+  z jiného počítače (python v `pyvenv.cfg` neexistuje) pozná a vytvoří znovu; zapisuje `%APPDATA%\MYpremiereMCP\root.txt`.

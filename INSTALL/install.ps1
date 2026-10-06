@@ -211,7 +211,12 @@ Head '2/4 Instalace'
 
 Write-Host '  [1] Node zavislosti'
 $nodeDone = $false
-if ($hasOffline -and -not (Test-Path (Join-Path $root 'node_modules\@modelcontextprotocol'))) {
+# slozka prenesena z jineho PC (flash disk) uz node_modules ma - npm by bez internetu spadl a nic noveho nepridal
+if ((Test-Path (Join-Path $root 'node_modules\@modelcontextprotocol\sdk')) -and (Test-Path (Join-Path $root 'node_modules\zod'))) {
+    Info 'node_modules uz jsou na miste (prenesena slozka) - preskakuji'
+    $nodeDone = $true
+}
+if (-not $nodeDone -and $hasOffline -and -not (Test-Path (Join-Path $root 'node_modules\@modelcontextprotocol'))) {
     $nodeDone = CopyFromOffline 'node_modules' 'node_modules'
 }
 if (-not $nodeDone) {
@@ -275,6 +280,15 @@ Info "mcp.json -> $serverPath"
 if (-not $SkipModels) {
     Write-Host '  [4] Python prostredi (.venv)'
     $py = Join-Path $root '.venv\Scripts\python.exe'
+    # .venv prenesena z jineho PC ukazuje na tamni Python (pyvenv.cfg "home = C:\Users\...") a tady nespusti -
+    # takovou smazat a vytvorit znovu (balicky se pak doinstaluji z offline baliku / internetu)
+    if (Test-Path $py) {
+        & $py -c "import sys" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Info '.venv z jineho pocitace tu nefunguje - vytvarim znovu'
+            Remove-Item (Join-Path $root '.venv') -Recurse -Force
+        }
+    }
     if (-not (Test-Path $py)) { & $pyCmd[0] $pyCmd[1..($pyCmd.Count - 1)] -m venv .venv }
     if (-not (Test-Path $py)) { throw 'Vytvoreni .venv selhalo.' }
     & $py -m pip install --upgrade pip 2>$null | Out-Null
@@ -376,6 +390,14 @@ if (-not $gpu -and $cfg.whisper.device -ne 'cpu') {
     Info 'bez NVIDIA GPU -> Whisper prepnut na CPU (device=cpu, compute=int8)'
 } elseif ($gpu) {
     Info "GPU nalezena -> Whisper zustava na CUDA (device=$($cfg.whisper.device))"
+}
+
+# Kde je aplikace - podle toho ji najde plugin pro aplikaci Claude (PLUGIN CLAUDE), i kdyz je slozka na jinem disku
+if (-not $fromTemp) {
+    $ptrDir = Join-Path $env:APPDATA 'MYpremiereMCP'
+    New-Item -ItemType Directory -Force $ptrDir | Out-Null
+    WriteTextNoBom (Join-Path $ptrDir 'root.txt') $root
+    Info "umisteni aplikace zapsano pro plugin Claude: $root"
 }
 
 Write-Host '  [9] Registrace MCP (Claude Code / Claude Desktop / Codex)'
