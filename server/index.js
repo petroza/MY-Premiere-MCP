@@ -2218,6 +2218,44 @@ tool(
   },
 );
 
+/* ------------------------------------------------------------------ Napojení na panel (zadání z panelu do aplikace Claude) */
+// Firemní účet má zakázaný příkazový Claude Code, aplikace Claude povolená je – ale z jiného programu do ní zadání
+// poslat nejde (odkaz claude:// jen předvyplní NOVOU relaci). Proto obráceně: Claude v aplikaci v režimu „napojení
+// na panel“ čeká na zadání z panelu (dlouhé čekání přes most), provede ho a průběh hlásí zpět do výpisu panelu.
+tool(
+  'panel_wait_task',
+  'NAPOJENÍ NA PANEL MY Premiere MCP: počká (až 4 min) na zadání, které uživatel napíše v panelu v Premiere, a vrátí ho. ' +
+    'Když panel nic nepošle, vrátí „nic“ – pak zavolej znovu. Používej jen v režimu napojení na panel (příkaz ' +
+    '/my-premiere-mcp:panel nebo výslovné přání uživatele).',
+  {},
+  async () => {
+    const r = JSON.parse((await bridge('/task/next', { waitMs: 240000 }, 250000)) || '{}');
+    if (!r.task) return 'Panel zatím nic neposlal. Zavolej panel_wait_task znovu (mezitím nic jiného nedělej).';
+    return (
+      `ZADÁNÍ Z PANELU (id ${r.task.id}):\n${r.task.prompt}\n\n` +
+      'Vykonej ho přes nástroje premiere podle pokynů pro střih (CLAUDE.md / skill premiere-strih): výsledek vždy jako ' +
+      `NOVÁ sekvence. Krátce hlas průběh přes panel_report (id ${r.task.id}), na konci panel_report s done: true a ` +
+      'jednovětým shrnutím (název sekvence, délka). Pak znovu panel_wait_task.'
+    );
+  },
+);
+
+tool(
+  'panel_report',
+  'NAPOJENÍ NA PANEL: zpráva do výpisu panelu MY Premiere MCP – průběh nebo výsledek zadání z panel_wait_task. ' +
+    'done: true = zadání hotové (panel ho označí jako dokončené).',
+  {
+    id: z.string().optional().describe('id zadání z panel_wait_task'),
+    text: z.string(),
+    done: z.boolean().optional(),
+    error: z.boolean().optional().describe('zadání se nepovedlo'),
+  },
+  async (a) => {
+    await bridge('/task/report', a, 10000);
+    return 'odesláno do panelu';
+  },
+);
+
 // „Jsem tu“ pro panel: indikátor „Claude“ v hlavičce panelu ukáže, že aplikace Claude (nebo Codex…) má plugin
 // připojený – server běží po celou dobu jejich relace. Každých 10 s, chyby (panel neběží) se ignorují.
 server.server.oninitialized = () => {

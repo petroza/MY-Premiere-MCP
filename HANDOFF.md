@@ -1226,3 +1226,17 @@ pravidlo organizace). Po chybě organizace panel nabídne tlačítka: aplikace C
   Klik na šedý otevře v aplikaci relaci „připoj se k Premiere“ (claude://code/new). Pomocné běhy panelu
   (run-tool, local-edit) se nezapočítávají. Ověřeno: simulovaná relace → zelený za ~6 s; skutečná relace aplikace
   Claude spuštěná po úpravě serveru → zelený. Starší relace (server spuštěný před úpravou) se nehlásí.
+
+### 26. Napojení aplikace Claude na panel + plugin pro aplikaci (2026-10-06)
+
+Odkaz `claude://code/new` jen předvyplní NOVOU relaci (potvrzení složky + Enter, nelze obejít, viz support 14729294);
+kanály (`claude/channel`) jsou research preview, u Team/Enterprise je musí povolit správce a vlastní kanál potřebuje
+`--dangerously-load-development-channels` (jen interaktivní CLI) → nepoužitelné. Řešení obráceně:
+- server: `panel_wait_task` (dlouhé čekání až 4 min na `/task/next` v panelu) a `panel_report` (`/task/report`);
+- panel: fronta zadání, čekání, výpis hlášení; agent „Claude (aplikace)“ / zablokovaný „Claude Code“: když aplikace
+  čeká, zadání převezme hned, jinak se zařadí a otevře se relace s napojením (PANEL_MODE_PROMPT); indikátor
+  „● Claude čeká na zadání / pracuje… / připojen / ○ Připojit Claude“.
+Ověřeno simulací relace aplikace (claude-code + claude-desktop): zadání převzato za 4,8 s, průběh a „hotovo“ ve výpisu.
+- `PLUGIN CLAUDE/`: `scripts/build-claude-plugin.py` → plugin `my-premiere-mcp` (skill `premiere-strih` z CLAUDE.md
+  + příkaz `/my-premiere-mcp:panel`) a `my-premiere-mcp.zip` pro Settings › Plugins › Upload. `claude plugin validate`
+  → Validation passed. MCP server v pluginu záměrně není (registruje instalátor, běžel by dvakrát).

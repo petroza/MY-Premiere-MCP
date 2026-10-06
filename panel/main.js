@@ -26,6 +26,9 @@
   var $ = function (id) { return document.getElementById(id); };
   var pocet = 0;
   var clients = {}; // pid MCP serveru -> kdo ho používá (hlásí se přes /hello)
+  // napojení na panel: zadání čekající na Claude (aplikace), otevřená čekání panel_wait_task, právě zpracovávané zadání
+  var taskQueue = [], taskWaiters = [], lastTaskPoll = 0, taskSeq = 0, activeTask = null;
+  function claudeListening() { return taskWaiters.length > 0 || Date.now() - lastTaskPoll < 15000; }
   $('port').textContent = PORT;
 
   function log(msg) {
@@ -138,6 +141,45 @@
     req.on('end', function () {
       var data;
       try { data = JSON.parse(body || '{}'); } catch (e) { return send(400, { error: 'bad json' }); }
+      // Napojení na panel: Claude v aplikaci čeká (panel_wait_task) na zadání z panelu a hlásí průběh (panel_report)
+      if (req.url === '/task/next') {
+        lastTaskPoll = Date.now();
+        if (taskQueue.length) {
+          activeTask = taskQueue.shift();
+          updateClaudeLink();
+          out('⚙ Claude (aplikace) převzal zadání a pracuje…', 'dim');
+          return send(200, { raw: JSON.stringify({ task: activeTask }) });
+        }
+        var waiter = { send: send, done: false };
+        waiter.timer = setTimeout(function () {
+          if (waiter.done) return;
+          waiter.done = true;
+          taskWaiters.splice(taskWaiters.indexOf(waiter), 1);
+          lastTaskPoll = Date.now();
+          send(200, { raw: JSON.stringify({ task: null }) });
+          updateClaudeLink();
+        }, Math.min(Number(data.waitMs) || 240000, 240000));
+        res.on('close', function () { // Claude relaci zavřel – čekání zrušit
+          if (waiter.done) return;
+          waiter.done = true;
+          clearTimeout(waiter.timer);
+          var i = taskWaiters.indexOf(waiter);
+          if (i >= 0) taskWaiters.splice(i, 1);
+          updateClaudeLink();
+        });
+        taskWaiters.push(waiter);
+        updateClaudeLink();
+        return;
+      }
+      if (req.url === '/task/report') {
+        out(String(data.text || ''), data.error ? 'err' : 'ai');
+        if (data.done || data.error) {
+          out(data.error ? '✖ Claude (aplikace): zadání se nepovedlo' : '✔ hotovo (Claude, aplikace)', data.error ? 'err' : 'dim');
+          activeTask = null;
+          updateClaudeLink();
+        }
+        return send(200, { raw: JSON.stringify({ ok: true }) });
+      }
       if (req.url === '/hello') {
         // MCP server pluginu hlásí, kdo ho používá (aplikace Claude, Codex…) – pro indikátor „Claude“ v hlavičce
         clients[String(data.pid)] = { client: String(data.client || '?'), entry: String(data.entry || ''), last: Date.now() };
@@ -396,28 +438,27 @@
     var el = $('claudeLink');
     if (!el) return;
     var list = connectedClients();
-    var on = list.some(function (l) { return /^Claude/.test(l); });
-    el.classList.toggle('on', on);
-    el.textContent = on ? '● Claude připojen' : '○ Připojit Claude';
-    el.title = on
-      ? 'Připojeno: ' + list.join(', ') + ' – Claude teď může ovládat Premiere přes plugin. Zadání piš v aplikaci Claude.'
-      : 'Aplikace Claude není připojená – klikni: otevře se v ní relace pluginu, odešli Enterem a do pár sekund se připojí.' +
-        (list.length ? ' (připojeno: ' + list.join(', ') + ')' : '');
+    var connected = list.some(function (l) { return /^Claude/.test(l); });
+    var listening = claudeListening();
+    el.classList.toggle('on', connected || listening);
+    el.textContent = activeTask ? '● Claude pracuje…' : listening ? '● Claude čeká na zadání' :
+      connected ? '● Claude připojen' : '○ Připojit Claude';
+    el.title = listening || activeTask
+      ? 'Aplikace Claude je napojená na panel: zadání s agentem Claude (aplikace) převezme hned a průběh píše sem.'
+      : connected
+        ? 'Aplikace Claude má plugin připojený, ale nečeká na zadání z panelu – klikni a zapni napojení na panel.'
+        : 'Aplikace Claude není připojená – klikni: otevře se v ní relace napojená na panel, potvrď složku a odešli Enterem.';
   }
   setInterval(updateClaudeLink, 5000);
   $('claudeLink').addEventListener('click', function () {
-    var list = connectedClients();
-    if (list.some(function (l) { return /^Claude/.test(l); })) {
-      out('Připojeno: ' + list.join(', ') + ' – zadání piš v aplikaci Claude, ovládá Premiere přes plugin.', 'dim');
+    if (claudeListening()) {
+      out('Claude (aplikace) je napojený na panel a čeká na zadání – vyber agenta Claude (aplikace) a klikni Spustit.', 'dim');
       return;
     }
-    var q = 'Připoj se k Premiere přes MCP server premiere: zavolej premiere_status, napiš mi název projektu a aktivní ' +
-      'sekvence a čekej na moje zadání. Pracuj podle CLAUDE.md.';
     try {
-      cp.spawn('rundll32.exe', ['url.dll,FileProtocolHandler',
-        'claude://code/new?q=' + encodeURIComponent(q) + '&folder=' + encodeURIComponent(ROOT)],
-        { detached: true, windowsHide: true }).unref();
-      out('⚙ V aplikaci Claude se otevřela relace pluginu – potvrď složku a odešli Enterem. Indikátor zezelená, až se připojí.', 'dim');
+      openClaudeApp(PANEL_MODE_PROMPT);
+      out('⚙ V aplikaci Claude se otevřela relace pro napojení na panel – potvrď složku a odešli Enterem. ' +
+        'Indikátor pak ukáže „Claude čeká na zadání“.', 'dim');
     } catch (e) {
       out('✖ Aplikaci Claude se nepodařilo otevřít: ' + e.message, 'err');
     }
@@ -659,17 +700,47 @@
   // „Claude (aplikace)“: zadání se předá desktopové aplikaci Claude odkazem claude://code/new (oficiální, viz
   // support.claude.com 14729294) – nová relace Claude Code ve složce pluginu s předvyplněným zadáním, stačí Enter.
   // Firemní účet má zakázaný příkazový `claude` (panel), aplikace ale povolená je – ruční přepínání přes chat odpadá.
+  // Text, kterým se relace v aplikaci Claude přepne do režimu napojení na panel (funguje i bez pluginu)
+  var PANEL_MODE_PROMPT =
+    'Napoj se na panel MY Premiere MCP v Premiere: opakovaně volej nástroj panel_wait_task (MCP server premiere). ' +
+    'Každé zadání, které vrátí, vykonej přes nástroje premiere podle CLAUDE.md (výsledek vždy jako NOVÁ sekvence), ' +
+    'průběh a výsledek hlas přes panel_report (na konci done: true) a pak znovu panel_wait_task. ' +
+    'Neukončuj práci, dokud tě o to nepožádám.';
+
+  function openClaudeApp(q) {
+    // rundll32 předá URL přímo obsluze protokolu – bez cmd.exe, který by rozbil znaky & a %
+    cp.spawn('rundll32.exe', ['url.dll,FileProtocolHandler',
+      'claude://code/new?q=' + encodeURIComponent(q) + '&folder=' + encodeURIComponent(ROOT)],
+      { detached: true, windowsHide: true }).unref();
+  }
+
+  // „Claude (aplikace)“: když je aplikace Claude napojená na panel (čeká v panel_wait_task), dostane zadání hned a průběh
+  // se vypisuje tady. Jinak zadání počká ve frontě a v aplikaci se otevře relace v režimu napojení (oficiální odkaz
+  // claude://code/new, support.claude.com 14729294) – po potvrzení složky a Enteru si ho hned vyzvedne.
   function sendToClaudeApp(prompt) {
-    var text = prompt + '\n\n(Zadání z panelu MY Premiere MCP. Pracuj přes MCP server premiere podle CLAUDE.md – ' +
-      'nejdřív premiere_status a get_sequence na aktivní sekvenci, výsledek vždy jako NOVÁ sekvence.)';
-    var url = 'claude://code/new?q=' + encodeURIComponent(text) + '&folder=' + encodeURIComponent(ROOT);
     out('› ' + prompt, 'me');
     lastPrompt = prompt;
+    var task = { id: String(++taskSeq), prompt: prompt };
+    var w = null;
+    while (taskWaiters.length && !w) { w = taskWaiters.shift(); if (w.done) w = null; }
+    if (w) {
+      w.done = true;
+      clearTimeout(w.timer);
+      activeTask = task;
+      w.send(200, { raw: JSON.stringify({ task: task }) });
+      out('⚙ předáno Claude (aplikace) – pracuje přes plugin, průběh se objeví tady', 'dim');
+      updateClaudeLink();
+      return;
+    }
+    taskQueue.push(task);
+    if (claudeListening()) {
+      out('⚙ zadání čeká – Claude (aplikace) si ho vyzvedne, až dokončí předchozí', 'dim');
+      return;
+    }
     try {
-      // rundll32 předá URL přímo obsluze protokolu – bez cmd.exe, který by rozbil znaky & a %
-      cp.spawn('rundll32.exe', ['url.dll,FileProtocolHandler', url], { detached: true, windowsHide: true }).unref();
-      out('⚙ Zadání je v aplikaci Claude (nová relace ve složce pluginu). Potvrď složku a odešli Enterem – výsledek ' +
-        'se objeví v Premiere a průběh uvidíš v aplikaci.', 'dim');
+      openClaudeApp(PANEL_MODE_PROMPT);
+      out('⚙ Claude (aplikace) zatím není napojený – v aplikaci se otevřela relace pro napojení na panel. Potvrď složku ' +
+        'a odešli Enterem; zadání si pak hned vyzvedne a další už půjdou rovnou.', 'dim');
     } catch (e) {
       out('✖ Aplikaci Claude se nepodařilo otevřít: ' + e.message, 'err');
     }
@@ -685,7 +756,7 @@
     if (agent === 'claude') {
       var blockedAt = 0;
       try { blockedAt = Number(localStorage.getItem('claudeCliBlocked') || 0); } catch (e) { /* bez paměti */ }
-      if (blockedAt && Date.now() - blockedAt < 24 * 3600 * 1000) {
+      if (claudeListening() || (blockedAt && Date.now() - blockedAt < 24 * 3600 * 1000)) {
         out('ℹ Příkazový Claude Code je u tvého účtu zakázaný – zadání jde do aplikace Claude.', 'dim');
         sendToClaudeApp(prompt);
         return;
