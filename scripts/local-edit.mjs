@@ -49,7 +49,7 @@ function targetSeconds(text) {
 
 const c = new Client({ name: 'local-edit', version: '0' });
 // env: SDK jinak předá serveru jen pár systémových proměnných – PMCP_PORT (TN Střihátko vedle Premiere) by se ztratil
-await c.connect(new StdioClientTransport({ command: 'node', args: [path.join(ROOT, 'server', 'index.js')], env: { ...process.env } }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(ROOT, 'server', 'index.js')], env: { ...process.env } }));
 const call = async (name, args, onprogress) => {
   const r = await c.callTool({ name, arguments: args }, undefined, { timeout: 7200000, resetTimeoutOnProgress: true, onprogress });
   if (r.isError) throw new Error(`${name}: ${r.content[0].text}`);

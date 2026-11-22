@@ -11,6 +11,9 @@ const NODE = process.execPath.replace(/\\/g, '/');
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 // "node" z PATH, když tam je; jinak plná cesta k Node, který tenhle skript spustil (přibalený tools\node)
 let NODE_CMD = 'node';
+// --move: aplikace se přestěhovala – registrace ukazující jinam se přepíší i tehdy, když stará cesta ještě existuje
+const MOVE = process.argv.includes('--move');
+const other = (p) => !!p && path.resolve(p).toLowerCase() !== path.resolve(SERVER).toLowerCase();
 try { execFileSync('where.exe', ['node'], { stdio: 'pipe' }); } catch { NODE_CMD = NODE; }
 
 function backup(file) {
@@ -32,7 +35,7 @@ try {
   // registrace ze staré instalace, která už neexistuje (přesunutá/smazaná složka) – přeregistrovat;
   // živou jinou instalaci nechat být (např. zkušební instalace nesmí přebrat tu hlavní)
   const oldPath = (registered.match(/^\s*Args:\s*(.+?)\s*$/m) || [])[1];
-  if (exists && oldPath && !fs.existsSync(oldPath)) {
+  if (exists && oldPath && (!fs.existsSync(oldPath) || (MOVE && other(oldPath)))) {
     execFileSync(claude, ['mcp', 'remove', 'premiere', '-s', 'user'], { stdio: 'pipe' });
     console.log(`Claude Code: stará registrace ukazovala na neexistující ${oldPath} – registruji znovu`);
     exists = false;
@@ -51,7 +54,7 @@ try {
     const cfg = fs.existsSync(userCfg) ? JSON.parse(fs.readFileSync(userCfg, 'utf8')) : {};
     cfg.mcpServers ??= {};
     const cur = cfg.mcpServers.premiere;
-    if (cur && fs.existsSync(cur.args?.[0] || '')) console.log('Claude Code: "premiere" už je v ~/.claude.json');
+    if (cur && fs.existsSync(cur.args?.[0] || '') && !(MOVE && other(cur.args?.[0]))) console.log('Claude Code: "premiere" už je v ~/.claude.json');
     else {
       if (fs.existsSync(userCfg)) backup(userCfg);
       cfg.mcpServers.premiere = { type: 'stdio', command: NODE_CMD, args: [SERVER], env: {} };
@@ -68,7 +71,7 @@ const desktop = path.join(process.env.APPDATA || '', 'Claude', 'claude_desktop_c
 if (fs.existsSync(desktop)) {
   const cfg = JSON.parse(fs.readFileSync(desktop, 'utf8'));
   cfg.mcpServers ??= {};
-  const dead = cfg.mcpServers.premiere && !fs.existsSync(cfg.mcpServers.premiere.args?.[0] || '');
+  const dead = cfg.mcpServers.premiere && (!fs.existsSync(cfg.mcpServers.premiere.args?.[0] || '') || (MOVE && other(cfg.mcpServers.premiere.args?.[0])));
   if (cfg.mcpServers.premiere && !dead) console.log('Claude Desktop: už je zaregistrovaný');
   else {
     const b = backup(desktop);
@@ -82,9 +85,10 @@ if (fs.existsSync(desktop)) {
 const codex = path.join(os.homedir(), '.codex', 'config.toml');
 if (fs.existsSync(codex)) {
   let txt = fs.readFileSync(codex, 'utf8');
-  const sect = txt.match(/^\[mcp_servers\.premiere\][^\[]*/m);
+  // sekce až po další hlavičku [..] na začátku řádku (dřív [^\[]* skončila u „args = [“ a starou cestu nikdy nenašla)
+  const sect = txt.match(/^\[mcp_servers\.premiere\][\s\S]*?(?=^\[|(?![\s\S]))/m);
   const codexOld = sect && (sect[0].match(/^args\s*=\s*\["([^"]+)"/m) || [])[1];
-  const codexDead = sect && codexOld && !fs.existsSync(codexOld);
+  const codexDead = sect && codexOld && (!fs.existsSync(codexOld) || (MOVE && other(codexOld)));
   if (sect && !codexDead) console.log('Codex: už je zaregistrovaný');
   else {
     const b = backup(codex);

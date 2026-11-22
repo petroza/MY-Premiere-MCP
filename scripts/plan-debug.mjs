@@ -3,7 +3,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 const c = new Client({ name: 'x', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
 const [p, t, ins] = process.argv.slice(2);
 const r = await c.callTool({ name: 'plan_edit_local', arguments: { path: p, targetSec: Number(t), instruction: ins, backend: 'hermes' } }, undefined, { timeout: 1800000 });
 const j = JSON.parse(r.content[0].text);

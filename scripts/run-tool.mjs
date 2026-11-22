@@ -32,7 +32,7 @@ function summary(name, r) {
 
 const c = new Client({ name: 'run-tool', version: '0' });
 // env: SDK jinak předá serveru jen pár systémových proměnných (PATH, HOME…) – ladicí PLAN_DEBUG apod. by se ztratily
-await c.connect(new StdioClientTransport({ command: 'node', args: [path.join(ROOT, 'server', 'index.js')], env: process.env }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(ROOT, 'server', 'index.js')], env: process.env }));
 let last = '';
 try {
   const r = await c.callTool({ name: tool, arguments: rawArgs ? JSON.parse(rawArgs) : {} }, undefined, {

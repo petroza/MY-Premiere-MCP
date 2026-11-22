@@ -7,7 +7,7 @@ await new Promise(r => setTimeout(r, 2000));
 const REF = 'O:/ADOBEPREMIERESTRIH/test/multicam/master_mix.wav';
 const mapping = JSON.parse(fs.readFileSync('test/multicam/mapping.json', 'utf8'));
 const c = new Client({ name: 't', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
 const call = async (name, args) => { const r = await c.callTool({ name, arguments: args }, undefined, { timeout: 900000 }); console.log(`\n=== ${name}${r.isError ? ' ERROR' : ''}\n` + r.content[0].text.slice(0, 1800)); };
 await call('transcribe_media', { path: REF, force: true, maxChars: 300 });
 await call('diarize_media', { path: REF, numSpeakers: 2 });

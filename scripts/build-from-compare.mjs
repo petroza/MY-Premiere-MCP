@@ -15,7 +15,7 @@ if (!plan) throw new Error(`V results.json není plán pro backend "${backend}"`
 console.log(`${backend}: ${plan.picks.length} vět, ${plan.estimatedSec} s`);
 
 const c = new Client({ name: 'build-from-compare', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 const r = await c.callTool(
   { name: 'build_sequence_from_transcript', arguments: { name, source, picks: plan.picks } },
   undefined,

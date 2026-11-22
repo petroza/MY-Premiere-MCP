@@ -6,7 +6,7 @@ const out = 'O:/ADOBEPREMIERESTRIH/test/export/multicam_pribeh.mp4';
 fs.mkdirSync('O:/ADOBEPREMIERESTRIH/test/export', { recursive: true });
 if (fs.existsSync(out)) fs.unlinkSync(out);
 const c = new Client({ name: 't', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
 const t0 = Date.now();
 const r = await c.callTool({ name: 'export_sequence', arguments: { output: out } }, undefined, { timeout: 1800000 });
 console.log(`export (${((Date.now() - t0) / 1000).toFixed(1)} s)${r.isError ? ' ERROR' : ''}: ${r.content[0].text}`);

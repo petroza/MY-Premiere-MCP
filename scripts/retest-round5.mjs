@@ -6,7 +6,7 @@ try { await fetch('http://127.0.0.1:7881/shutdown', { method: 'POST', headers: {
 await new Promise(r => setTimeout(r, 3000));
 const REF = 'O:/ADOBEPREMIERESTRIH/test/multicam/master_mix.wav';
 const c = new Client({ name: 't', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
 const t0 = Date.now();
 const r = await c.callTool({ name: 'plan_edit_local', arguments: { path: REF, instruction: 'Krátká verze rozhovoru jen o tom, jak dělat videa zdarma a na jakém hardwaru', targetSec: 40 } }, undefined, { timeout: 900000 });
 console.log(`=== plan_edit_local (${((Date.now()-t0)/1000).toFixed(1)} s)${r.isError ? ' ERROR' : ''}\n` + r.content[0].text);

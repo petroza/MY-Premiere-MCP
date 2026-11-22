@@ -10,7 +10,7 @@ const llamaCount = () =>
   Number(execFileSync('powershell', ['-NoProfile', '-Command', "@(Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\").Count"], { encoding: 'utf8' }).trim());
 
 const c = new Client({ name: 'restart', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 const call = async (name, args = {}) => {
   const r = await c.callTool({ name, arguments: args }, undefined, { timeout: 900000 });
   if (r.isError) throw new Error(`${name}: ${r.content[0].text}`);

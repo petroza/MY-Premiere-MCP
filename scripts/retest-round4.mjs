@@ -7,7 +7,7 @@ await new Promise(r => setTimeout(r, 3000));
 const REF = 'O:/ADOBEPREMIERESTRIH/test/multicam/master_mix.wav';
 const GT = JSON.parse(fs.readFileSync('test/multicam/gt.json', 'utf8'));
 const c = new Client({ name: 't', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
 const call = async (name, args, max = 1600) => { const t0 = Date.now(); const r = await c.callTool({ name, arguments: args }, undefined, { timeout: 900000 }); console.log(`\n=== ${name} (${((Date.now()-t0)/1000).toFixed(1)} s)${r.isError ? ' ERROR' : ''}\n` + r.content[0].text.slice(0, max)); return r; };
 await call('transcribe_media', { path: REF, force: true, speakerTracks: GT.mics.map(m => ({ name: m.name, path: m.path })), maxChars: 1600 });
 await call('analyze_transcript', { path: REF }, 1200);

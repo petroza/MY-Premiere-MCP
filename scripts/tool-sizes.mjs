@@ -3,7 +3,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 const c = new Client({ name: 'sizes', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'], env: { ...process.env } }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'], env: { ...process.env } }));
 const { tools } = await c.listTools();
 const rows = tools.map((t) => ({ name: t.name, desc: t.description.length, schema: JSON.stringify(t.inputSchema).length }));
 rows.sort((a, b) => b.desc + b.schema - a.desc - a.schema);

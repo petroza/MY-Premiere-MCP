@@ -20,7 +20,7 @@ const TASKS = [
 ];
 
 const c = new Client({ name: 'plan-battery', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 const idx = JSON.parse(fs.readFileSync(`${ROOT}/cache/transcripts/index.json`, 'utf8'));
 const md = ['# Sada zadání – plan_edit_local', ''];
 for (const t of TASKS) {

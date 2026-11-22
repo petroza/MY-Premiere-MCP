@@ -16,7 +16,7 @@ const OUT = `${ROOT}/test/llm-compare`;
 fs.mkdirSync(OUT, { recursive: true });
 
 const c = new Client({ name: 'compare-llm', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 const call = async (name, args) => {
   const t0 = Date.now();
   const r = await c.callTool({ name, arguments: args }, undefined, { timeout: 7200000, resetTimeoutOnProgress: true });

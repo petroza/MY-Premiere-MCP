@@ -9,7 +9,7 @@ const GT = JSON.parse(fs.readFileSync(`${ROOT}/test/multicam/gt.json`, 'utf8'));
 const REF = GT.reference;
 const FFPROBE = 'C:/Program Files/Shutter Encoder/Library/ffprobe.exe';
 const c = new Client({ name: 'test-finish', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 let failed = 0;
 async function call(name, args = {}, max = 1500) {
   const t0 = Date.now();

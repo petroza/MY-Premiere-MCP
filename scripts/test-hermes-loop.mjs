@@ -18,7 +18,7 @@ const TASK =
 const OFFTOPIC_IDS = new Set([20, 21, 30, 31, 32, 38, ...Array.from({ length: 29 }, (_, i) => 243 + i)]);
 
 const c = new Client({ name: 'hermes-loop', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 const call = async (name, args = {}) => {
   const t0 = Date.now();
   const r = await c.callTool({ name, arguments: args }, undefined, { timeout: 7200000, resetTimeoutOnProgress: true });

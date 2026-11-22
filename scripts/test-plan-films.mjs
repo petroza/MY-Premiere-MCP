@@ -18,7 +18,7 @@ const TASKS = [
 ].filter((t) => !process.argv[2] || t.task.includes(process.argv[2]));
 
 const c = new Client({ name: 'plan-films', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 const idx = JSON.parse(fs.readFileSync(`${ROOT}/cache/transcripts/index.json`, 'utf8'));
 const md = ['# Filmy – plan_edit_local', ''];
 for (const t of TASKS) {

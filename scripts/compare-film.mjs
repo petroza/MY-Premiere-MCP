@@ -29,7 +29,7 @@ const resultsFile = `${OUT}/results.json`;
 const results = fs.existsSync(resultsFile) ? JSON.parse(fs.readFileSync(resultsFile, 'utf8')) : {};
 
 const mcp = new Client({ name: 'compare-film', version: '0' });
-await mcp.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await mcp.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 const call = async (name, args = {}) => {
   const r = await mcp.callTool({ name, arguments: args }, undefined, { timeout: 1800000, resetTimeoutOnProgress: true });
   if (r.isError) throw new Error(`${name}: ${r.content[0].text}`);

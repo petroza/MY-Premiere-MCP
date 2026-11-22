@@ -29,7 +29,7 @@ if (!seqName) {
 /* ---------------------------------------------------------------- data ze sekvence */
 
 const c = new Client({ name: 'qa-sequence', version: '0' });
-if (!fromJson) await c.connect(new StdioClientTransport({ command: 'node', args: [path.join(ROOT, 'server', 'index.js')], env: { ...process.env } }));
+if (!fromJson) await c.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(ROOT, 'server', 'index.js')], env: { ...process.env } }));
 const call = async (name, a) => {
   const r = await c.callTool({ name, arguments: a }, undefined, { timeout: 120000 });
   if (r.isError) throw new Error(`${name}: ${r.content[0].text}`);

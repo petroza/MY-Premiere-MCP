@@ -11,7 +11,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), '..');
 const seqArg = process.argv[2];
 const c = new Client({ name: 'check-cuts', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [path.join(ROOT, 'server', 'index.js')], env: { ...process.env } }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(ROOT, 'server', 'index.js')], env: { ...process.env } }));
 const call = async (name, args) => {
   const r = await c.callTool({ name, arguments: args }, undefined, { timeout: 600000 });
   if (r.isError) throw new Error(`${name}: ${r.content[0].text}`);

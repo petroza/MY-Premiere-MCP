@@ -16,7 +16,7 @@ const segs = tr.segments;
 const byId = new Map(segs.map((s) => [s.id, s]));
 
 const c = new Client({ name: 'eval-seq', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 
 for (const name of names) {
   let seq;

@@ -1151,7 +1151,11 @@
       env = Object.assign({}, process.env, { PMCP_TARGET_SEC: task.targetSec ? String(task.targetSec) : '',
         PMCP_SEQUENCE: task.seqId || '' });
     }
-    child = cp.spawn(exe, args, { cwd: ROOT, windowsHide: true, shell: useShell, env: env });
+    // .cmd přes cmd.exe: argumenty s mezerou (cesta aplikace „O:\AI STRIH ALL app\…“ v --mcp-config / mcp_servers.args) musí být
+    // v uvozovkách, jinak je cmd rozdělí (Node je u shell: true sám neozávorkuje)
+    var qa = function (a) { a = String(a); return /[\s"&|<>^()]/.test(a) ? '"' + a.replace(/"/g, '\\"') + '"' : a; };
+    child = useShell ? cp.spawn(qa(exe), args.map(qa), { cwd: ROOT, windowsHide: true, shell: true, env: env })
+      : cp.spawn(exe, args, { cwd: ROOT, windowsHide: true, shell: false, env: env });
     child.stdin.end(prompt, 'utf8');
 
     var buf = '';

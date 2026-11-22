@@ -13,7 +13,7 @@ const want = (s) => !steps.length || steps.includes(s);
 const normKey = (p) => path.resolve(p).toLowerCase();
 
 const c = new Client({ name: 'test-worker', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 let failed = 0;
 async function call(name, args = {}, max = 2500) {
   const t0 = Date.now();

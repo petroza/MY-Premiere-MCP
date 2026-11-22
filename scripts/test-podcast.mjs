@@ -2,7 +2,7 @@
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 const SRC = 'O:/ADOBEPREMIERESTRIH/test/podcast/Diskuse1.mp4';
 const c = new Client({ name: 'podcast', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
 async function call(name, args, max = 2500) {
   const t0 = Date.now();
   let last = -1;

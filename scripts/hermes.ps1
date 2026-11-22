@@ -66,8 +66,9 @@ if ($busy) {
 New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 
 # -a dflash: alias modelu, na ktery se odkazuje config.json (llmBackends.hermes.model)
-$argy = @('-m', $model)
-if ($Vize) { $argy += @('--mmproj', $mmproj) }
+# cesty v uvozovkach: Start-Process v PS 5.1 spoji argumenty mezerou bez uvozovek (slozka aplikace s mezerami, 2026-11-22)
+$argy = @('-m', "`"$model`"")
+if ($Vize) { $argy += @('--mmproj', "`"$mmproj`"") }
 $argy += @('--temp', '0.6', '--top-p', '0.95', '--top-k', '20', '--min-p', '0',
            '-a', 'dflash', '--host', '127.0.0.1', '--port', $Port,
            '-np', '1', '--load-mode', 'none', '--jinja', '-fa', 'on',

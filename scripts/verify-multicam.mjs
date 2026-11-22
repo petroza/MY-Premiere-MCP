@@ -3,7 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import fs from 'node:fs';
 const GT = JSON.parse(fs.readFileSync('test/multicam/gt.json', 'utf8'));
 const c = new Client({ name: 't', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
 const r = await c.callTool({ name: 'get_sequence', arguments: {} });
 const seq = JSON.parse(r.content[0].text);
 console.log(`sekvence ${seq.name} ${seq.duration}s fps ${seq.fps} ${seq.width}x${seq.height}`);

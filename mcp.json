@@ -2,7 +2,7 @@
   "mcpServers": {
     "premiere": {
       "command": "node",
-      "args": ["O:/ADOBEPREMIERESTRIH/server/index.js"]
+      "args": ["O:/AI STRIH ALL app/MY Premiere MCP - plugin do Premiere - zdrojovy kod/server/index.js"]
     }
   }
 }

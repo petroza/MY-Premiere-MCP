@@ -8,7 +8,7 @@ const steps = process.argv.slice(2);
 const want = (s) => !steps.length || steps.includes(s);
 
 const c = new Client({ name: 'test-premiere', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: ['O:/ADOBEPREMIERESTRIH/server/index.js'] }));
 
 let failed = 0;
 async function call(name, args = {}) {

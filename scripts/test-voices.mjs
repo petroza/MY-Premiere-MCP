@@ -11,7 +11,7 @@ const OTHER = `${ROOT}/test/podcast/Diskuse1.mp4`;
 const NAMES = ['Ferancová', 'Vašíř', 'Moderátor Napřímo']; // podle času řeči sestupně
 
 const c = new Client({ name: 'test-voices', version: '0' });
-await c.connect(new StdioClientTransport({ command: 'node', args: [`${ROOT}/server/index.js`] }));
+await c.connect(new StdioClientTransport({ command: process.execPath, args: [`${ROOT}/server/index.js`] }));
 const call = async (name, args = {}) => {
   const r = await c.callTool({ name, arguments: args }, undefined, { timeout: 3600000, resetTimeoutOnProgress: true });
   if (r.isError) throw new Error(`${name}: ${r.content[0].text}`);
