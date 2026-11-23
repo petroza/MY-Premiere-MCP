@@ -998,6 +998,10 @@ def _teaser_candidates(path: str, segs: dict[int, dict], exclude: set, avoid: se
                 out.append({"units": units[n: m + 1], "dur": round(d, 1),
                             # nejkratší ticho na krajích (ms): krátká pauza = větší riziko slyšitelné hranice
                             "edge_ms": min(edge_ms[n - 1] if n else 500.0, edge_ms[m]),
+                            # těsně před úderem otázka jiného mluvčího (úder je odpověď – sám bez ní nedává smysl)
+                            "prev_q": bool(n and units[n - 1]["text"].strip().endswith("?")
+                                           and (units[n - 1]["spk"] != units[n]["spk"] or units[n]["spk"] is None)
+                                           and units[n]["s"] - units[n - 1]["e"] < 1.5),
                             # okolí pro kontrolu vytržení z kontextu
                             "before": " ".join(u["text"] for u in units[max(0, n - 2): n]),
                             "after": " ".join(u["text"] for u in units[m + 1: m + 3])})
@@ -1487,10 +1491,17 @@ def _plan_story(instruction: str, target: float, segs: dict[int, dict], chapters
 
 _CONJ_START = re.compile(r"(a|ale|i|aby|a pak|a najednou|a tak|a proto|takže)\b", re.I)
 # příčinná souvislost uvnitř úderu („…a proto jsem se dostala na Novu“) – za pozdějším úderem vyzní jako jeho důsledek
+# začátek odpovědi, která bez své otázky nedává smysl („Všechno, naprosto všechno…“ na „Co všechno se zbortí?“, AI tok S11)
+_ANSWER_START = re.compile(r"(všechno|nic|nikdy|vždycky|jo|ne|ano|určitě|rozhodně|asi|přesně|samozřejmě|jasně|vůbec|absolutně|"
+                           r"hodně|strašně|no|tak určitě|to je)\b", re.I)
+# úder začínající odkazem na předchozí („To je jedna z nejlepších věcí…“ za „…byla pryč“ – AI tok S12): jen jako první (hák)
+# nebo hned za svou původní předchozí větou, jinak ho divák vztáhne k cizímu úderu
+_REF_START = re.compile(r"(to ne\w+|to je|to byl|to byla|to bylo|to byly|tohle|tohleto|tenhle|tahle|tohle je|právě to|takže to)\b", re.I)
+_PAD = 0.3  # rezerva střihu na úder (padBefore + padAfter + doladění) – odhad délky stavby
 _CAUSAL = re.compile(r"\b(proto|takže|díky tomu|kvůli tomu|tím pádem|a tak)\b", re.I)
 # zdvořilosti na začátku a konci rozhovoru – v upoutávce nejsou úder (noc 2026-11-23: 30s upoutávka končila
 # „Děkuji moc za pozvání, Kristýnko.“)
-_SMALLTALK = re.compile(r"(^|[.!?]\s+)(děkuj\w*( moc| mockrát| vám| ti)* za (pozvání|rozhovor|příležitost)|ahoj\b|dobrý (den|večer)\b|na shledanou|vítej\w*\b|vítám\w*\b|mějte se|krásný zbytek)|za pozvání", re.I)
+_SMALLTALK = re.compile(r"(^|[.!?]\s+)(děkuj\w*( moc| mockrát| vám| ti)* za (pozvání|rozhovor|příležitost)|ahoj\b|dobrý (den|večer)\b|na shledanou|vítej\w*\b|vítám\w*\b|mějte se|krásný zbytek|máme (ještě )?(dvě|pár|tři|jen|už) minut\w*|nestihli jsme|na závěr|to je pro dnešek|uvidíme se|příště|v příštím díle|děkujeme\b)|za pozvání", re.I)
 
 
 def _teaser_host(cands: list, instruction: str):
@@ -1567,22 +1578,67 @@ def _teaser_guard(order: list, cands: list, top: list, instruction: str, target:
             else:
                 order = sorted(order, key=st0)
     if host is not None:
-        for c in [c for c in order if c["units"][0].get("spk") == host][1:]:
-            if len(order) > 2:
+        # moderátor/ka nejvýš jedním úderem – přednost má otázka, za kterou hned stojí její odpověď (jinak by vypadla otázka
+        # a v upoutávce zůstala osamělá odpověď „Všechno, naprosto všechno…“, AI tok S11)
+        hosts = [c for c in order if c["units"][0].get("spk") == host]
+        def _answered(c):
+            i = order.index(c)
+            return text(c).strip().endswith("?") and i + 1 < len(order) and 0 < first(order[i + 1]) - last(c) <= 2
+        keep = next((c for c in hosts if _answered(c)), hosts[0] if hosts else None)
+        for c in hosts:
+            if c is not keep and len(order) > 2:
                 order.remove(c)
+        # dlouhý úder moderátora (AI tok S11: 9 s z 19 s = 48 %) – upoutávka je o hostovi
+        for c in [c for c in order if c["units"][0].get("spk") == host]:
+            if len(order) >= 2 and c["dur"] > 0.3 * target:  # délku pak dorovná doplnění níž
+                order.remove(c)
+    # 5) odpověď bez své otázky („Všechno, naprosto všechno…“ bez „Co všechno se zbortí?“) – vypadne
+    for c in list(order):
+        i = order.index(c)
+        asked = i > 0 and 0 < first(c) - last(order[i - 1]) <= 1
+        if c.get("prev_q") and _ANSWER_START.match(text(c).strip()) and not asked and len(order) >= 2:
+            order.remove(c)
+    if not order:  # pojistka – pravidla nesmí upoutávku vyprázdnit (Hermes vybral jen otázky a úvod moderátorky)
+        ok = [x for x in top if not _teaser_bad_spare(x, text, host) and not _CONJ_START.match(text(x).strip())
+              and not (x.get("prev_q") and _ANSWER_START.match(text(x).strip()))]
+        order = sorted((ok or top)[:2], key=st0)
+    # 6) odkazovací začátek mimo první místo bez své předchozí věty – vypadne (doplnění délky pak dorovná)
+    for c in list(order):
+        i = order.index(c)
+        if i > 0 and _REF_START.match(text(c).strip()) and last(order[i - 1]) != first(c) - 1 and len(order) >= 2:
+            order.remove(c)
+    est = lambda o: sum(x["dur"] for x in o) + _PAD * len(o)  # noqa: E731 – délka stavby i s rezervami střihu
     for c in top:
-        if sum(x["dur"] for x in order) >= 0.85 * target:
+        if est(order) >= 0.85 * target:
             break
         if c in order or _teaser_bad_spare(c, text, host) or any(key(c) & key(y) for y in order) \
-                or _CONJ_START.match(text(c).strip()) or sum(x["dur"] for x in order) + c["dur"] > 1.15 * target:
+                or _CONJ_START.match(text(c).strip()) or est(order) + c["dur"] + _PAD > 1.1 * target \
+                or (c.get("prev_q") and _ANSWER_START.match(text(c).strip())) or _REF_START.match(text(c).strip()):
             continue
         slot = next((i for i in range(1, len(order)) if st0(order[i - 1]) < st0(c) < st0(order[i])), None)
         if slot is None and order and st0(c) > st0(order[-1]):
             slot = len(order)  # za poslední úder, když zazněl později (AI tok S4: upoutávka jen 10,7 s z 20)
-        if slot is None and order and st0(c) < st0(order[0]) and all(st0(a) < st0(b) for a, b in zip(order, order[1:])):
+        if slot is None and order and st0(c) < st0(order[0]) and all(st0(a) < st0(b) for a, b in zip(order, order[1:])) \
+                and not _REF_START.match(text(order[0]).strip()):
             slot = 0  # před první úder, jen když jdou údery chronologicky – jinak je první hák z pozdější části (revize)
         if slot is not None:
             order.insert(slot, c)
+    if order and _REF_START.match(text(order[0]).strip()) and est(order) < 0.7 * target and len(order) >= 2:
+        order.pop(0)
+        for c in top:
+            if est(order) >= 0.85 * target:
+                break
+            if c in order or _teaser_bad_spare(c, text, host) or any(key(c) & key(y) for y in order) \
+                    or _CONJ_START.match(text(c).strip()) or _REF_START.match(text(c).strip()) \
+                    or est(order) + c["dur"] + _PAD > 1.1 * target or (c.get("prev_q") and _ANSWER_START.match(text(c).strip())):
+                continue
+            order.append(c)
+            order.sort(key=st0)
+    # odkazující začátek se mohl po doplnění dostat za cizí úder – znovu (AI tok S12)
+    for c in list(order):
+        i = order.index(c)
+        if i > 0 and _REF_START.match(text(c).strip()) and last(order[i - 1]) != first(c) - 1 and len(order) > 2:
+            order.remove(c)
     # pojistka: žádná věta dvakrát (náhrada úderu se spojkou hlídala překryv jen s údery před ní – noc 2026-11-23:
     # 30s upoutávka měla #213 dvakrát za sebou)
     uniq: list = []
@@ -1599,7 +1655,9 @@ def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude
     cands = _teaser_candidates(path, segs, exclude, avoid)
     if len(cands) < 2:
         return None
-    cands = [c for c in cands if not _SMALLTALK.search(" ".join(u["text"] for u in c["units"]))] or cands
+    # zdvořilosti a organizace pořadu – i úder, který na takovou větu přímo navazuje („Máme dvě minuty.“ → „To vždycky uteče…“)
+    cands = [c for c in cands if not _SMALLTALK.search(" ".join(u["text"] for u in c["units"]))
+             and not _SMALLTALK.search(re.split(r"(?<=[.!?…])\s+", (c.get("before") or "").strip())[-1] if c.get("before") else "")] or cands
     n_all = len(cands)
     cands = _teaser_cut_check(path, segs, cands)
     ctx.progress(0.28, f"Hranice úderů ověřené podle zvuku: {len(cands)} z {n_all} kandidátů lze čistě střihnout")
@@ -1667,8 +1725,19 @@ def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude
                     "minimum": 1, "maximum": len(top)}}}, "required": ["spatne"]}, backend=backend)
     bad = {n for n in (r.get("spatne") or []) if isinstance(n, int) and 1 <= n <= len(top)}
     distorted = [text(top[n - 1]) for n in sorted(bad)]
-    if len(top) - len(bad) >= 2:
+    bad_keys = set().union(*[key(top[n - 1]) for n in bad]) if bad else set()
+    if len([c for c in top if not key(c) & bad_keys]) >= 2:
+        top = [c for c in top if not key(c) & bad_keys]
+    elif len(top) - len(bad) >= 2:
         top = [c for n, c in enumerate(top, 1) if n not in bad]
+    # zásoba pro doplnění délky v kontrole bez modelu: dalších (horších) až 30 úderů bez překryvů – po vyřazení úderů
+    # moderátora a osamělých odpovědí 12 nestačilo (30s upoutávka 18,9 s); zkreslující (kontrola kontextu) ne
+    pool: list[dict] = list(top)
+    for _, c in rated:
+        if len(pool) >= 30:
+            break
+        if c not in pool and text(c) not in distorted and not key(c) & bad_keys and not any(key(c) & key(t) for t in pool):
+            pool.append(c)
     ctx.progress(0.8, "LLM skládá upoutávku")
     # čas v rozhovoru u každého úderu: model vidí, co zaznělo dřív a co později (AI tok S2: „…a proto jsem se dostala
     # na Novu“ z 2. minuty stálo hned za smrtí mámy z 21. minuty a vyznělo jako její důsledek)
@@ -1709,21 +1778,26 @@ def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude
     # vznikla souvislost, která v rozhovoru není (AI tok S2, viz výš)
     st0 = lambda c: c["units"][0]["s"]  # noqa: E731
     for c in top:
-        if sum(x["dur"] for x in order) >= 0.85 * target:
+        if sum(x["dur"] for x in order) + _PAD * len(order) >= 0.85 * target:
             break
-        if c in order or sum(x["dur"] for x in order) + c["dur"] > 1.15 * target:
+        if c in order or sum(x["dur"] for x in order) + _PAD * (len(order) + 1) + c["dur"] > 1.1 * target:
             continue
         slot = next((i for i in range(1, len(order)) if st0(order[i - 1]) < st0(c) < st0(order[i])), None)
         if slot is None and order and st0(c) > st0(order[-1]):
             slot = len(order)
         if slot is not None:
             order.insert(slot, c)
-    order = _teaser_guard(order, cands, top, instruction, target, text, key)
+    before = [id(c) for c in order]
+    order = _teaser_guard(order, cands, pool, instruction, target, text, key)
     total = sum(c["dur"] for c in order)
+    reason = _clean_reason(r.get("uvaha"))
+    if [id(c) for c in order] != before:
+        # kontrola bez modelu výběr změnila – úvaha modelu by popisovala jiné věty (AI tok S11)
+        reason = "Údery (výběr upravila kontrola bez modelu): " + " → ".join(f"„{text(c)[:60]}{'…' if len(text(c)) > 60 else ''}“" for c in order)
     return {
         "note": None, "picks": [p for c in order for p in _teaser_picks(c)], "estimatedSec": round(total, 1),
         "alternates": [u["id"] for c in top if c not in order for u in c["units"]], "dropped": [],
-        "mode": "teaser", "passages": len(cands), "reason": _clean_reason(r.get("uvaha")), "distorted": distorted,
+        "mode": "teaser", "passages": len(cands), "reason": reason, "distorted": distorted,
         # náhradní údery (nejlépe hodnocené mimo upoutávku): server je vloží, když kvůli slyšitelné hranici vyřadí úder
         "spares": [{"picks": _teaser_picks(c), "dur": c["dur"], "ids": sorted({u["id"] for u in c["units"]})}
                    for c in top if c not in order and not _teaser_bad_spare(c, text, _teaser_host(cands, instruction))][:6],

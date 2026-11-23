@@ -2190,7 +2190,9 @@ tool(
       '',
       'Teď se uživatele zeptej česky, co chce nastříhat (jakou délku, o čem, styl) – teprve pak vrať JSON plán podle formátu výše.',
     ].join('\n');
-    const dest = output ? path.resolve(output) : `${p}.analyza.md`;
+    let dest = output ? path.resolve(output) : `${p}.analyza.md`;
+    // jen textový soubor (bezpečnost S12: libovolná přípona – vznikl spustitelný .cmd s přepisem řeči)
+    if (!/\.(md|txt)$/i.test(dest)) dest += '.md';
     fs.writeFileSync(dest, out, 'utf8');
     return { file: dest, sentences: tr.segments.length, sizeKB: Math.round(Buffer.byteLength(out) / 1024) };
   },

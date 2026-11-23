@@ -233,7 +233,17 @@ def _repair_batched(model, src: str, raw: list[dict], duration: float, common: d
     ctx.progress(0.82, f"kontrola {len(wins)} podezřelých míst ({total:.0f} s) klasickým přepisem")
     segs, _ = model.transcribe(src, condition_on_previous_text=False, clip_timestamps=[t for w in wins for t in w], **common)
     fresh: list[dict] = []
-    for seg in segs:
+    it = iter(segs)
+    while True:
+        try:
+            seg = next(it)
+        except StopIteration:
+            break
+        except IndexError as e:
+            # faster-whisper: zarovnání časů slov u segmentu bez textu (tón, pípání) padá na IndexError – oprava je jen
+            # doplněk, zůstane první průchod (zátěž S12: „Přepis selhal“ u médií bez řeči)
+            log(f"asr: oprava přepisu přerušena ({e})")
+            break
         ctx.check()
         wds = _seg_words(seg)
         probs = [wd["p"] for wd in wds]

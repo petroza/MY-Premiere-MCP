@@ -233,6 +233,8 @@
   /* ---------------- formát pro sociální sítě (Auto Reframe) ---------------- */
   var FORMATS = { '9:16': [9, 16, 1080, 1920], '1:1': [1, 1, 1080, 1080], '4:5': [4, 5, 1080, 1350] };
   try { var savedFormat = localStorage.getItem('format'); if (savedFormat) $('format').value = savedFormat; } catch (e) { /* bez paměti */ }
+  var ccManual = false;
+  $('ccChars').addEventListener('change', function () { ccManual = true; });
   $('format').addEventListener('change', function () {
     try { localStorage.setItem('format', $('format').value); } catch (e) { /* bez paměti */ }
     // na výšku se 40 znaků na řádek nevejde (1080 px šířky) – titulky rovnou na 25, na šířku zpět 40
@@ -330,8 +332,14 @@
     if (child) return; // během úlohy ExtendScript nezdržovat
     hostCall('projectInfo').then(function (p) {
       var a = p.activeSequence;
-      $('srcName').textContent = a ? a.name : 'žádná aktivní sekvence – otevři sekvenci s klipem';
-      $('srcName').title = a ? 'Ze které sekvence se bude stříhat (aktivní v Premiere)' : '';
+      $('srcName').textContent = a ? a.name : 'žádná';
+      $('srcName').title = a ? 'Ze které sekvence se bude stříhat (aktivní)' : 'žádná aktivní sekvence – otevři sekvenci s klipem';
+      // bez sekvence jen „žádná“ – dlouhý text se za popiskem Aktivní sekvence opakoval a usekl (vzhled S4 #11, S11);
+      // titulky podle tvaru aktivní sekvence (jako okno Text v obraze: na výšku 20 znaků), dokud je uživatel nezměnil (AI tok S11)
+      if (a && a.width && a.height && !ccManual) {
+        var r = a.width / a.height;
+        $('ccChars').value = r < 0.8 ? '20' : r < 1.2 ? '30' : '40';
+      }
     }).catch(function () { $('srcName').textContent = '–'; });
   }
   setInterval(pollSource, 4000);
@@ -381,7 +389,9 @@
     if (!hostOk || req.headers.origin) return send(403, { error: 'forbidden' });
 
     if (req.method === 'GET' && req.url === '/ping') return send(200, { ok: true, app: 'PPRO', panel: '0.1.0' });
-    if (req.headers['x-pmcp-token'] !== TOKEN) return send(401, { error: 'bad token' });
+    // token v konstantním čase (bezpečnost S13)
+    var tk = Buffer.from(String(req.headers['x-pmcp-token'] || '')), tt = Buffer.from(String(TOKEN));
+    if (tk.length !== tt.length || !require('crypto').timingSafeEqual(tk, tt)) return send(401, { error: 'bad token' });
     if (req.method !== 'POST') return send(404, { error: 'not found' });
 
     var body = '';

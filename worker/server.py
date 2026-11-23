@@ -5,6 +5,7 @@ Spuštění:  .venv\\Scripts\\python.exe worker\\server.py
 """
 from __future__ import annotations
 
+import hmac
 import hashlib
 import json
 import os
@@ -179,7 +180,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.headers.get("Origin") or not re.match(r"^(127\.0\.0\.1|localhost):\d+$", self.headers.get("Host", "")):
             self._send(403, {"error": "forbidden"})
             return False
-        if self.path != "/health" and self.headers.get("X-PMCP-Token") != TOKEN:
+        # porovnání v konstantním čase (bezpečnost S12)
+        if self.path != "/health" and not hmac.compare_digest(str(self.headers.get("X-PMCP-Token") or ""), str(TOKEN)):
             self._send(401, {"error": "bad token"})
             return False
         return True
