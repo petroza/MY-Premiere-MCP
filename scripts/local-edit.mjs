@@ -156,7 +156,7 @@ try {
   if (plan.offTopic?.length) notes.push(`vyřazeno mimo téma: ${plan.offTopic.length} vět`);
   if (plan.fixedFragments?.length) notes.push(`doplněny začátky souvětí: ${plan.fixedFragments.length}`);
   if (plan.snappedEdges) notes.push(`kraje dotaženy k pauze: ${plan.snappedEdges}`);
-  if (plan.elapsedSec) notes.push(`plán ${Math.round(plan.elapsedSec)} s`);
+  if (plan.elapsedSec) notes.push(`plánování trvalo ${Math.round(plan.elapsedSec)} s`); // ne délka střihu (AI tok S11/S12: „plán 9 s“ u 30 s výsledku)
   if (notes.length) say(`ℹ ${notes.join(' · ')}`);
   if (plan.note) say(`⚠ ${plan.note}`);
   for (const n of built?.sceneCuts || []) say(`🎞 ${n}`);

@@ -181,7 +181,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send(403, {"error": "forbidden"})
             return False
         # porovnání v konstantním čase (bezpečnost S12)
-        if self.path != "/health" and not hmac.compare_digest(str(self.headers.get("X-PMCP-Token") or ""), str(TOKEN)):
+        if self.path != "/health" and not hmac.compare_digest(str(self.headers.get("X-PMCP-Token") or "").encode("utf-8", "surrogateescape"), str(TOKEN).encode("utf-8", "surrogateescape")):  # bajty: ne-ASCII token jinak TypeError (revize S14)
             self._send(401, {"error": "bad token"})
             return False
         return True

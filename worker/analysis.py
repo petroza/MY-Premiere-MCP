@@ -1501,7 +1501,11 @@ _PAD = 0.3  # rezerva střihu na úder (padBefore + padAfter + doladění) – o
 _CAUSAL = re.compile(r"\b(proto|takže|díky tomu|kvůli tomu|tím pádem|a tak)\b", re.I)
 # zdvořilosti na začátku a konci rozhovoru – v upoutávce nejsou úder (noc 2026-11-23: 30s upoutávka končila
 # „Děkuji moc za pozvání, Kristýnko.“)
-_SMALLTALK = re.compile(r"(^|[.!?]\s+)(děkuj\w*( moc| mockrát| vám| ti)* za (pozvání|rozhovor|příležitost)|ahoj\b|dobrý (den|večer)\b|na shledanou|vítej\w*\b|vítám\w*\b|mějte se|krásný zbytek|máme (ještě )?(dvě|pár|tři|jen|už) minut\w*|nestihli jsme|na závěr|to je pro dnešek|uvidíme se|příště|v příštím díle|děkujeme\b)|za pozvání", re.I)
+# zdvořilosti a organizace pořadu – jen ustálené fráze (revize S14: „Nestihli jsme se s mámou rozloučit“, „Na závěr…“,
+# „Příště…“, „Děkujeme všem hasičům…“ jsou silné údery, ne zdvořilost)
+_SMALLTALK = re.compile(r"(^|[.!?]\s+)(děkuj\w*( moc| mockrát| vám| ti)* za (pozvání|rozhovor|příležitost)|ahoj\b|dobrý (den|večer)\b|na shledanou|vítej\w*\b|vítám\w*\b|mějte se|krásný zbytek|to je pro dnešek|v příštím díle|(uvidíme|slyšíme|těšíme) se( zase)? (příště|za týden|v dalším)|děkujeme( vám| všem)? (za (pozornost|sledování|pozvání|rozhovor)|že jste (se dívali|byli))|máme (ještě )?(dvě|pár|tři|jen|už) minut\w*|nestihli jsme (to )?(rozebrat|probrat|všechno))|za pozvání", re.I)
+# organizace pořadu – vyřadí i úder, který na ni přímo navazuje („Máme dvě minuty.“ → „To vždycky uteče…“)
+_SHOW_LOGISTICS = re.compile(r"máme (ještě )?(dvě|pár|tři|jen|už) minut\w*|nestihli jsme (to )?(rozebrat|probrat|všechno)|čas (nám )?(utíká|vypršel|došel)", re.I)
 
 
 def _teaser_host(cands: list, instruction: str):
@@ -1657,7 +1661,7 @@ def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude
         return None
     # zdvořilosti a organizace pořadu – i úder, který na takovou větu přímo navazuje („Máme dvě minuty.“ → „To vždycky uteče…“)
     cands = [c for c in cands if not _SMALLTALK.search(" ".join(u["text"] for u in c["units"]))
-             and not _SMALLTALK.search(re.split(r"(?<=[.!?…])\s+", (c.get("before") or "").strip())[-1] if c.get("before") else "")] or cands
+             and not _SHOW_LOGISTICS.search(re.split(r"(?<=[.!?…])\s+", (c.get("before") or "").strip())[-1] if c.get("before") else "")] or cands
     n_all = len(cands)
     cands = _teaser_cut_check(path, segs, cands)
     ctx.progress(0.28, f"Hranice úderů ověřené podle zvuku: {len(cands)} z {n_all} kandidátů lze čistě střihnout")

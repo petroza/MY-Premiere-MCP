@@ -56,7 +56,8 @@
   }
 
   /* ---------------- token ---------------- */
-  var TOKEN_DIR = path.join(process.env.APPDATA || ROOT, 'MYpremiereMCP');
+  // PZ_WORKER_APPDATA: izolovaná testovací instance – stejný token jako server MCP a sdílený Worker (S14)
+  var TOKEN_DIR = path.join(process.env.PZ_WORKER_APPDATA || process.env.APPDATA || ROOT, 'MYpremiereMCP');
   var TOKEN_FILE = path.join(TOKEN_DIR, 'token.txt');
   var TOKEN;
   try {

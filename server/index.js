@@ -34,7 +34,7 @@ function appPython(rel) {
 }
 const CACHE_DIR = path.resolve(ROOT, CONFIG.cacheDir);
 const INDEX_FILE = path.join(CACHE_DIR, 'index.json');
-const TOKEN_FILE = path.join(process.env.APPDATA || ROOT, 'MYpremiereMCP', 'token.txt');
+const TOKEN_FILE = path.join(process.env.PZ_WORKER_APPDATA || process.env.APPDATA || ROOT, 'MYpremiereMCP', 'token.txt');
 const NOT_RUNNING =
   'Střihový program neodpovídá. Otevři Premiere Pro s panelem MY Premiere MCP (Okno > Rozšíření > MY Premiere MCP), nebo aplikaci PZ AI Cut.';
 
@@ -274,7 +274,10 @@ async function ensureWorker() {
   workerStarting ??= (async () => {
     const py = appPython(CONFIG.worker?.python);
     if (!fs.existsSync(py)) throw new Error(`Python Workeru nenalezen: ${py} – spusť INSTALL\\Instalace.cmd`);
-    const child = spawn(py, [path.join(ROOT, 'worker', 'server.py')], { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true });
+    // Worker je sdílený pro celý počítač – token vždy ze skutečného profilu (PZ_WORKER_APPDATA nastaví izolovaná testovací
+    // instance; jinak by Worker spuštěný z ní měl token z dočasného profilu a Premiere / skutečná aplikace dostaly 401)
+    const wenv = process.env.PZ_WORKER_APPDATA ? { ...process.env, APPDATA: process.env.PZ_WORKER_APPDATA } : process.env;
+    const child = spawn(py, [path.join(ROOT, 'worker', 'server.py')], { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: true, env: wenv });
     child.unref();
     for (let i = 0; i < 90; i++) {
       await sleep(1000);
