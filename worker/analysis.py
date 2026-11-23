@@ -1508,6 +1508,23 @@ _SMALLTALK = re.compile(r"(^|[.!?]\s+)(děkuj\w*( moc| mockrát| vám| ti)* za (
 _SHOW_LOGISTICS = re.compile(r"máme (ještě )?(dvě|pár|tři|jen|už) minut\w*|nestihli jsme (to )?(rozebrat|probrat|všechno)|čas (nám )?(utíká|vypršel|došel)", re.I)
 
 
+# krátká věta se zájmenem bez předchůdce („My jsme neměli možnost se na to připravit.“, „Není věc, kterou bych ji
+# neřekla.“) nebo úlomek („Často rozhodně nezahojí.“) – mimo hák jen hned za svou předchozí větou (AI tok S15: máma ani
+# úmrtí v upoutávce nezazněly, „na to“ znělo jako nástup na Novu)
+_ANAPHOR = re.compile(r"\b(ji|jí|ona|ho|mu|jemu|její|jeho|na to|o tom|kvůli tomu|s ním|s ní|po tom|před tím)\b", re.I)
+
+
+def _is_ref(t: str) -> bool:
+    t = (t or "").strip()
+    if _REF_START.match(t):
+        return True
+    first = re.split(r"(?<=[.!?…])\s+", t)[0]
+    words = first.split()
+    if len(re.findall(r"\w+", t)) <= 4:
+        return True
+    return len(words) <= 12 and bool(_ANAPHOR.search(first))
+
+
 def _teaser_host(cands: list, instruction: str):
     """Moderátor/ka = mluvčí s nejkratší řečí mezi kandidáty (aspoň 2 mluvčí). None, když zadání moderátora výslovně chce
     („bez moderátorky“ ho naopak vylučuje – revize #14)."""
@@ -1609,7 +1626,7 @@ def _teaser_guard(order: list, cands: list, top: list, instruction: str, target:
     # 6) odkazovací začátek mimo první místo bez své předchozí věty – vypadne (doplnění délky pak dorovná)
     for c in list(order):
         i = order.index(c)
-        if i > 0 and _REF_START.match(text(c).strip()) and last(order[i - 1]) != first(c) - 1 and len(order) >= 2:
+        if i > 0 and _is_ref(text(c)) and last(order[i - 1]) != first(c) - 1 and len(order) >= 2:
             order.remove(c)
     est = lambda o: sum(x["dur"] for x in o) + _PAD * len(o)  # noqa: E731 – délka stavby i s rezervami střihu
     for c in top:
@@ -1617,23 +1634,23 @@ def _teaser_guard(order: list, cands: list, top: list, instruction: str, target:
             break
         if c in order or _teaser_bad_spare(c, text, host) or any(key(c) & key(y) for y in order) \
                 or _CONJ_START.match(text(c).strip()) or est(order) + c["dur"] + _PAD > 1.1 * target \
-                or (c.get("prev_q") and _ANSWER_START.match(text(c).strip())) or _REF_START.match(text(c).strip()):
+                or (c.get("prev_q") and _ANSWER_START.match(text(c).strip())) or _is_ref(text(c)):
             continue
         slot = next((i for i in range(1, len(order)) if st0(order[i - 1]) < st0(c) < st0(order[i])), None)
         if slot is None and order and st0(c) > st0(order[-1]):
             slot = len(order)  # za poslední úder, když zazněl později (AI tok S4: upoutávka jen 10,7 s z 20)
         if slot is None and order and st0(c) < st0(order[0]) and all(st0(a) < st0(b) for a, b in zip(order, order[1:])) \
-                and not _REF_START.match(text(order[0]).strip()):
+                and not _is_ref(text(order[0])):
             slot = 0  # před první úder, jen když jdou údery chronologicky – jinak je první hák z pozdější části (revize)
         if slot is not None:
             order.insert(slot, c)
-    if order and _REF_START.match(text(order[0]).strip()) and est(order) < 0.7 * target and len(order) >= 2:
+    if order and _is_ref(text(order[0])) and est(order) < 0.7 * target and len(order) >= 2:
         order.pop(0)
         for c in top:
             if est(order) >= 0.85 * target:
                 break
             if c in order or _teaser_bad_spare(c, text, host) or any(key(c) & key(y) for y in order) \
-                    or _CONJ_START.match(text(c).strip()) or _REF_START.match(text(c).strip()) \
+                    or _CONJ_START.match(text(c).strip()) or _is_ref(text(c)) \
                     or est(order) + c["dur"] + _PAD > 1.1 * target or (c.get("prev_q") and _ANSWER_START.match(text(c).strip())):
                 continue
             order.append(c)
@@ -1641,7 +1658,7 @@ def _teaser_guard(order: list, cands: list, top: list, instruction: str, target:
     # odkazující začátek se mohl po doplnění dostat za cizí úder – znovu (AI tok S12)
     for c in list(order):
         i = order.index(c)
-        if i > 0 and _REF_START.match(text(c).strip()) and last(order[i - 1]) != first(c) - 1 and len(order) > 2:
+        if i > 0 and _is_ref(text(c)) and last(order[i - 1]) != first(c) - 1 and len(order) > 2:
             order.remove(c)
     # pojistka: žádná věta dvakrát (náhrada úderu se spojkou hlídala překryv jen s údery před ní – noc 2026-11-23:
     # 30s upoutávka měla #213 dvakrát za sebou)

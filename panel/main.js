@@ -159,13 +159,16 @@
   var targetSec = 0;
   try { targetSec = Number(localStorage.getItem('targetSec') || 0); } catch (e) { /* bez paměti */ }
   var chips = document.querySelectorAll('.chip[data-sec]'); // jen délky – šablony zadání mají třídu chip taky
+  var NEEDS_LEN = /upoutávk|výrok|teaser|highlight|trailer/i;
   function paintChips() {
     Array.prototype.forEach.call(chips, function (c) { c.classList.toggle('on', Number(c.getAttribute('data-sec')) === targetSec); });
   }
   Array.prototype.forEach.call(chips, function (c) {
     c.addEventListener('click', function () {
       var s = Number(c.getAttribute('data-sec'));
-      targetSec = targetSec === s ? 0 : s;
+      // upoutávka / výrok bez délky = celý materiál (AI tok S15: druhý klik na „20 s“ délku vypnul → 14 min „upoutávka“);
+      // vypnout délku jde jen u zadání, které ji nepotřebuje
+      targetSec = targetSec === s && !NEEDS_LEN.test($('prompt').value || '') ? 0 : s;
       try { localStorage.setItem('targetSec', String(targetSec)); } catch (e) { /* bez paměti */ }
       paintChips();
     });
@@ -1066,8 +1069,11 @@
 
   /** zadání z formuláře (text, agent, model, délka) – pro hned spuštění i pro frontu */
   function formTask() {
-    return { prompt: $('prompt').value.trim(), agent: $('agent').value, model: $('model').value,
-      targetSec: targetSec, resume: $('pokracovat').checked, format: $('format').value };
+    var p = $('prompt').value.trim();
+    // pojistka: upoutávka / výrok bez zvolené délky a bez délky v textu = 20 s, ne celý materiál (AI tok S15)
+    var sec = targetSec || (NEEDS_LEN.test(p) && !/\d+\s*(s\b|sek|vteř|min)/i.test(p) ? 20 : 0);
+    return { prompt: p, agent: $('agent').value, model: $('model').value,
+      targetSec: sec, resume: $('pokracovat').checked, format: $('format').value };
   }
 
   /** Spustí zadání. Vrací 'spawned' (běží, na konci zavolá task.onDone), 'sent' (předáno aplikaci Claude) nebo false. */
