@@ -4,13 +4,14 @@
 // Výstup: ✔ v pořádku · ✖ chyba (exit kód 1) · ⚠ upozornění (nerozhoduje o exit kódu) · – nelze ověřit.
 // Texty úseků se berou stejně jako ve scripts/seq-text.mjs (slova přepisu uvnitř klipu); souvětí stejně jako
 // continuityWarnings v server/index.js (věta s . ! ? a pauzou ≥ 0,8 s je uzavřená).
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'); // cesta s mezerami: .pathname by nechal %20
 const args = process.argv.slice(2);
 const flag = (f) => { const i = args.indexOf(f); if (i >= 0) args.splice(i, 1); return i >= 0; };
 let noCuts = flag('--no-cuts');

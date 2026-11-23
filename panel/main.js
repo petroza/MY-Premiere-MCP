@@ -1184,7 +1184,7 @@
     child.stderr.on('data', function (d) { errBuf = (errBuf + d).slice(-4000); });
     child.on('error', function (e) { out('✖ ' + e.message, 'err'); });
     child.on('close', function (code) {
-      if (code && errBuf.trim()) out('✖ ' + errBuf.trim().slice(-1200), 'err');
+      if (code && errBuf.trim()) out('✖ ' + cleanErr(errBuf), 'err');
       child = null;
       $('stop').disabled = true;
       setAiIcon(null);
@@ -1306,6 +1306,15 @@
 
   // Přímé spuštění jednoho nástroje bez AI agenta (titulky): mechanická úloha, agent by jen stál kredity
   // a čas. Výstup i průběh jako u lokálního střihu, Stop funguje stejně.
+  // chyba procesu pro uživatele: bez zásobníku a cest node_modules (redaktorka S1: „✖ tion closed at McpError.fromError (file:///…“)
+  function cleanErr(s) {
+    var lines = String(s).split(/\r?\n/).filter(function (l) {
+      return l.trim() && !/^\s+at /.test(l) && !/^\s*[{}],?\s*$/.test(l) && !/^\s*(code|data):/.test(l) && !/^Node\.js v/.test(l) && !/^\s*\^+\s*$/.test(l);
+    }).map(function (l) { return l.replace(/file:\/\/\/\S+/g, '').trim(); });
+    var t = lines.slice(-4).join('\n').slice(-600);
+    if (/Connection closed/.test(s)) t += '\nServer MY Premiere MCP se nespustil nebo spadl. Zavři a znovu otevři panel; když to trvá, spusť INSTALL\\Instalace.cmd (zkontroluje instalaci).';
+    return t;
+  }
   function runTool(label, tool, toolArgs) {
     if (child) { out('Nejdřív počkej, až předchozí úloha doběhne (nebo klikni Stop).', 'err'); return; }
     var exe = findExe('node');
@@ -1329,7 +1338,7 @@
     child.stderr.on('data', function (d) { errBuf = (errBuf + d).slice(-4000); });
     child.on('error', function (e) { out('✖ ' + e.message, 'err'); });
     child.on('close', function (code) {
-      if (code && errBuf.trim()) out('✖ ' + errBuf.trim().slice(-1200), 'err');
+      if (code && errBuf.trim()) out('✖ ' + cleanErr(errBuf), 'err');
       child = null;
       $('stop').disabled = true;
       setAiIcon(null);

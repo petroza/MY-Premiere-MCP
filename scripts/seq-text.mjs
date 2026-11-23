@@ -1,11 +1,12 @@
 // Vypíše, co je ve střihu: klipy sekvence -> věty přepisu (text, mluvčí, délka). Pro srovnání agentů.
 //   node scripts/seq-text.mjs "<sekvence>" ["<sekvence2>" ...]
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'); // cesta s mezerami: .pathname by nechal %20
 const c = new Client({ name: 'seq-text', version: '0' });
 await c.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(ROOT, 'server', 'index.js')], env: { ...process.env } }));
 const idx = JSON.parse(fs.readFileSync(path.join(ROOT, 'cache', 'transcripts', 'index.json'), 'utf8'));

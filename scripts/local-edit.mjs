@@ -1,11 +1,12 @@
 // Lokální střih bez kreditů: zadání ze stdin -> lokální model (backend "hermes") vybere věty -> nová sekvence.
 // Používá panel (volba "Hermes (lokálně, zdarma)"); ručně: echo "zadani" | node scripts/local-edit.mjs [backend]
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'); // cesta s mezerami: .pathname by nechal %20
 const BACKEND = process.argv[2] || 'hermes';
 const say = (s) => process.stdout.write(s + '\n');
 

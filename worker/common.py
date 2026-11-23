@@ -108,6 +108,12 @@ def index_set(kind: str, path: str, file: Path) -> None:
     write_json(idx_file, idx)
 
 
+# PATH při startu Workeru – než do něj add_nvidia_dll_dirs přidá knihovny CUDA z pip balíčků (Whisper). Programy s vlastními
+# knihovnami CUDA (llama-server Hermese) se musí spouštět s tímhle, jinak načtou cizí verzi a spadnou na „CUDA error“
+# (2026-11-22: Hermes padal při prvním dotazu vždy, když Worker předtím přepisoval).
+ORIG_PATH = os.environ.get("PATH", "")
+
+
 def add_nvidia_dll_dirs() -> None:
     """cuBLAS/cuDNN z pip balíčků nvidia-* nejsou v PATH – CTranslate2 i llama.cpp by je nenašly."""
     if os.name != "nt":

@@ -36,7 +36,7 @@ const CACHE_DIR = path.resolve(ROOT, CONFIG.cacheDir);
 const INDEX_FILE = path.join(CACHE_DIR, 'index.json');
 const TOKEN_FILE = path.join(process.env.APPDATA || ROOT, 'MYpremiereMCP', 'token.txt');
 const NOT_RUNNING =
-  'Panel MY Premiere MCP neodpovídá. Otevři Premiere Pro a panel Okno > Rozšíření > MY Premiere MCP.';
+  'Střihový program neodpovídá. Otevři Premiere Pro s panelem MY Premiere MCP (Okno > Rozšíření > MY Premiere MCP), nebo aplikaci PZ AI Cut.';
 
 /* ------------------------------------------------------------------ most do Premiere */
 
@@ -70,9 +70,9 @@ async function bridge(url, payload, timeoutMs = 120000) {
   if (res.status === 504) {
     // ExtendScript běží dál i po vypršení limitu a engine je jednovláknový – opakované volání by čekalo za ním
     // (agent tak jednou zopakoval detekci řezů a zablokoval Premiere na desítky minut)
-    throw new Error(`Premiere nestihla odpovědět do ${Math.round(timeoutMs / 1000)} s a nejspíš ještě počítá. ` +
+    throw new Error(`Střihový program (Premiere / PZ AI Cut) nestihl odpovědět do ${Math.round(timeoutMs / 1000)} s a nejspíš ještě počítá. ` +
       'NEOPAKUJ stejné volání – zmenši rozsah (např. detect_scene_cuts s ranges), nebo počkej. ' +
-      'Pokud je v Premiere otevřený dialog, zavři ho.');
+      'Pokud je v programu otevřený dialog, zavři ho.');
   }
   if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
   return body.raw;
@@ -86,7 +86,8 @@ async function premiere(fn, args = {}, timeoutMs) {
   } catch {
     throw new Error('Neplatná odpověď z ExtendScriptu: ' + String(raw).slice(0, 400));
   }
-  if (!out.ok) throw new Error(`Premiere (${fn}): ${out.error}${out.line ? ` [host.jsx:${out.line}]` : ''}`);
+  // host.jsx (Premiere) posílá číslo řádku, most PZ AI Cut ne – předpona podle toho, kdo chybu hlásí (AI tok S3)
+  if (!out.ok) throw new Error(`${out.line ? 'Premiere' : 'Střihový program'} (${fn}): ${out.error}${out.line ? ` [host.jsx:${out.line}]` : ''}`);
   return out.result;
 }
 
@@ -181,6 +182,16 @@ function runPython(args, extra) {
 }
 
 /* ------------------------------------------------------------------ lokální Worker */
+
+/** Most patří aplikaci PZ AI Cut (ne Premiere) – ping vrací app „TNSTRIH“. */
+async function standaloneHost() {
+  try {
+    const p = await premiere('ping');
+    return !!p && p.app === 'TNSTRIH';
+  } catch {
+    return false;
+  }
+}
 
 const WORKER_URL = `http://127.0.0.1:${CONFIG.worker?.port || 7881}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -395,6 +406,7 @@ async function refineOutPoints(source, ranges, extra) {
   const starts = ranges.map((r) => ({
     at: r.in, direction: 'start', maxExtend: Math.max(0, Math.min(0.3, r.in - (r.minIn ?? r.in - 0.3) + 0.1)),
     fallbackExtend: Math.max(0, Math.min(0.3, r.in - (r.minIn ?? r.in - 0.3) - 0.02)),
+    word: r.word, // začátek prvního slova: pauza mezi r.in a ním má přednost (úlomek „…k“ z „tak.“)
   }));
   try {
     const res = await runJob('refine_edges', { path: source, points: [...points, ...starts] }, extra);
@@ -749,7 +761,7 @@ function picksToRanges(tr, picks, { padBefore, padAfter, mergeGap }) {
     }
     const [lo, hi, hiCeiling, loFloor] = cutBounds(words, a, b, padBefore, padAfter);
     const dur = tr.duration || hi;
-    return { in: lo, minIn: loFloor, out: Math.min(hi, dur), maxOut: Math.min(hiCeiling, dur), ids: [p.id] };
+    return { in: lo, minIn: loFloor, word: a, out: Math.min(hi, dur), maxOut: Math.min(hiCeiling, dur), ids: [p.id] };
   });
   return mergeRanges(ranges, mergeGap);
 }
@@ -828,6 +840,18 @@ async function timelineCues(seq, a, extra) {
     return true;
   });
   if (!clips.length) throw new Error('Sekvence nemá žádné klipy se zvukem/řečí.');
+  // navazující kusy téhož zdroje (žiletka, zvuk rozříznutý spolu s obrazem po převodu na 9:16) jako jeden úsek – jinak slovo
+  // přes neviditelný řez nedostal žádný kus a v titulcích vypadlo („Když ~přijde~ Rodina“, AI tok S11)
+  clips.sort((x, y) => (x.track || 0) - (y.track || 0) || x.start - y.start);
+  const runs = [];
+  for (const c of clips) {
+    const r = runs.at(-1), sp = c.speed || 1;
+    if (r && r.mediaPath === c.mediaPath && (r.track || 0) === (c.track || 0) && (r.speed || 1) === sp
+      && Math.abs(r.start + (r.outPoint - r.inPoint) / sp - c.start) < 0.01 && Math.abs(r.outPoint - c.inPoint) < 0.01) {
+      r.outPoint = c.outPoint;
+    } else runs.push({ ...c });
+  }
+  clips = runs;
   const sources = [...new Set(clips.map((c) => c.mediaPath))];
   const transcripts = {};
   // jen jazyk – ne celé `a`: `force` u titulků znamená „přidat další titulkovou stopu“, v přepisu by spustil nový
@@ -1122,10 +1146,15 @@ tool(
     bin: z.string().optional().describe('Název binu (vytvoří se)'),
     openSequence: z.boolean().optional().describe('Z každého videa vytvořit sekvenci (nastavení podle klipu) a otevřít ji na timeline'),
   },
-  async ({ paths, bin, openSequence }, extra) => {
+  async ({ paths: all, bin, openSequence }, extra) => {
+    // neexistující soubor = chyba (AI tok S8: import překlepu prošel jako úspěch s „Project item not found“)
+    const missing = all.filter((p) => !fs.existsSync(p));
+    if (missing.length === all.length) throw new Error(`Soubor neexistuje: ${missing.join(', ')}`);
+    const paths = all.filter((p) => !missing.includes(p));
     const safe = [];
     for (const p of paths) safe.push(await premiereMedia(p, extra));
-    const res = await premiere('importFiles', { paths: safe, bin, openSequence }, 300000);
+    let res = await premiere('importFiles', { paths: safe, bin, openSequence }, 300000);
+    if (missing.length) res = Array.isArray(res) ? [...res, ...missing.map((p) => ({ path: p, error: 'Soubor neexistuje' }))] : { ...res, missing };
     const conv = paths.filter((p, i) => safe[i] !== p);
     return conv.length ? { ...res, converted: paths.map((p, i) => safe[i] !== p && `${path.basename(p)} → ${safe[i]}`).filter(Boolean) } : res;
   },
@@ -1380,7 +1409,8 @@ tool(
     const fingerprint = contentFingerprint(seq);
     const capIdx = loadCaptionsIndex();
     const prev = capIdx[seq.sequenceID];
-    if (prev && prev.fingerprint === fingerprint && !a.force) {
+    // PZ AI Cut (standalone) titulky sekvence nahradí – omezení Premiery na první titulkovou stopu tam neplatí (AI tok S2)
+    if (prev && prev.fingerprint === fingerprint && !a.force && !(await standaloneHost())) {
       throw new Error(
         `Sekvence „${seq.name}“ už titulky jednou dostala (${prev.when}). Premiera bohužel umí zobrazit jen úplně PRVNÍ ` +
           'vytvořenou titulkovou stopu – další přidaná by zůstala v projektu, ale neviditelná. Smaž nejdřív v Premiere ' +
@@ -1501,10 +1531,12 @@ tool(
     const srtPath = path.join(dir, `${(seq.name || 'sequence').replace(/[^\w.-]+/g, '_')}.${seq.sequenceID.slice(0, 8)}${a.translate ? `.${a.translate}` : ''}.srt`);
     fs.writeFileSync(srtPath, srtLines.join('\n'), 'utf8');
 
-    await premiere('addCaptions', { sequence: seq.sequenceID, srtPath });
+    // lines/charsPerLine: PZ AI Cut titulky přeskládá podle stylu sekvence – výslovné zadání agenta má přednost (AI tok S3);
+    // Premiere je ignoruje (řádky jsou už v SRT)
+    const capRes = await premiere('addCaptions', { sequence: seq.sequenceID, srtPath, lines: a.lines, charsPerLine: a.charsPerLine });
     capIdx[seq.sequenceID] = { when: new Date().toISOString(), srt: srtPath, sequence: seq.name, fingerprint };
     saveCaptionsIndex(capIdx);
-    return { cues: cues.length, srt: srtPath, sequence: seq.name, translated: translated || undefined,
+    return { cues: (capRes && capRes.count) || cues.length, srt: srtPath, sequence: seq.name, translated: translated || undefined,
       sample: cues.slice(0, 3).map((c) => c.text.trim()) };
   },
 );
@@ -1695,13 +1727,18 @@ tool('set_playhead', 'Posune přehrávací hlavu na čas timeline.', { sequence:
 
 tool(
   'export_sequence',
-  'Exportuje sekvenci do souboru (přímo z Premiere, nebo zařadí do Media Encoderu).',
+  'Exportuje sekvenci do souboru. Premiere: přímo, nebo přes Media Encoder (preset .epr). PZ AI Cut (standalone): ffmpeg – ' +
+    'titulky sekvence se vypálí do obrazu a hlasitost se srovná (na výšku/čtverec −14 LUFS pro sítě), formát podle přípony nebo `format`.',
   {
     sequence: seqArg,
     output: z.string().describe('Výstupní soubor, např. O:/export/strih.mp4'),
-    preset: z.string().optional().describe('Cesta k .epr (výchozí H.264 Match Source High bitrate)'),
+    preset: z.string().optional().describe('Premiere: cesta k .epr (výchozí H.264 Match Source High bitrate)'),
     range: z.enum(['entire', 'inout', 'workarea']).optional(),
-    useAME: z.boolean().optional().describe('Zařadit do Adobe Media Encoder místo přímého exportu'),
+    useAME: z.boolean().optional().describe('Premiere: zařadit do Adobe Media Encoder místo přímého exportu'),
+    burnCaptions: z.boolean().optional().describe('PZ AI Cut: vypálit titulky do obrazu (výchozí ano, když sekvence titulky má)'),
+    srt: z.boolean().optional().describe('PZ AI Cut: uložit i titulky .srt vedle videa'),
+    loudness: z.enum(['social', 'tv', 'off']).optional().describe('PZ AI Cut: hlasitost −14 LUFS (social), −23 LUFS (tv), beze změny (off); výchozí podle tvaru sekvence'),
+    format: z.enum(['h264', 'h265', 'prores_hq', 'prores', 'mov_h264', 'xdcam', 'dnxhr']).optional().describe('PZ AI Cut: kodek/kontejner (výchozí podle přípony: .mp4 H.264, .mov ProRes HQ, .mxf XDCAM)'),
   },
   (a) => premiere('exportSequence', { ...a, preset: a.preset || CONFIG.defaultExportPreset }, 3600000),
 );

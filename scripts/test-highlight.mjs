@@ -3,11 +3,12 @@
 //   shoda s referencí (překryv vět), délka proti cíli, čisté hranice (scripts/check-cuts.mjs), čas plánu.
 //   node scripts/test-highlight.mjs [filtr názvu případu]
 // Případy: scripts/highlight-cases.json (sekvence v otevřeném projektu, zadání, cílová délka, reference = ID vět).
+import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'); // cesta s mezerami: .pathname by nechal %20
 const cases = JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts', 'highlight-cases.json'), 'utf8'))
   .filter((c) => !process.argv[2] || c.name.includes(process.argv[2]));
 const rows = [];

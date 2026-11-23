@@ -1,10 +1,11 @@
 // Přímé spuštění jednoho nástroje MCP serveru bez AI agenta (panel: titulky, dabing) – zdarma a rychleji než
 // přes Clauda, s průběhem. node scripts/run-tool.mjs <nástroj> '<json argumenty>'
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'); // cesta s mezerami: .pathname by nechal %20
 const [tool, rawArgs] = process.argv.slice(2);
 const say = (s) => process.stdout.write(s + '\n');
 if (!tool) {

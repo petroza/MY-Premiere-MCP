@@ -10,9 +10,10 @@ import os
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 
-from .common import CONFIG, ROOT, add_nvidia_dll_dirs, log, model_path
+from .common import CONFIG, ORIG_PATH, ROOT, add_nvidia_dll_dirs, log, model_path, write_json
 
 add_nvidia_dll_dirs()
 
@@ -339,8 +340,10 @@ def _hermes_ready(b: dict) -> bool:
 
 def _hermes_script(b: dict, action: str, *extra: str) -> None:
     # bez zachytávání výstupu: llama-server spuštěný přes Start-Process by zdědil rouru a čekání by nikdy neskončilo
+    # původní PATH (bez knihoven CUDA z pip, které přidal Whisper) – viz common.ORIG_PATH
+    env = dict(os.environ, PATH=ORIG_PATH)
     subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / b["start"]), action, *extra],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=480,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=480, env=env,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
@@ -495,8 +498,39 @@ def chat_json(prompt: str, max_tokens: int = 1500, schema: dict | None = None, b
             payload["chat_template_kwargs"] = {"enable_thinking": False}
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
     t0 = time.time()
-    with urllib.request.urlopen(req, timeout=900) as r:
-        resp = json.loads(r.read())
+    try:
+        try:
+            with urllib.request.urlopen(req, timeout=900) as r:
+                resp = json.loads(r.read())
+        except urllib.error.HTTPError:
+            raise  # odpověď serveru (např. překročený kontext) není pád modelu – nerestartovat (revize #13)
+        except (ConnectionError, urllib.error.URLError) as e0:
+            # Hermes spadl („CUDA error“ na čerstvém serveru u některých dotazů, 2026-11-22): znovu spustit (hermes.ps1
+            # ho po startu zahřeje krátkým dotazem) a zkusit ještě jednou
+            if backend != "hermes":
+                raise
+            log(f"GPU: Hermes během dotazu spadl ({e0}) – spouštím znovu a opakuji dotaz")
+            time.sleep(2)
+            if not ensure_hermes():
+                raise
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=900) as r:
+                resp = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "replace")[:300]
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(f"lokální model ({backend or 'local'}) odmítl dotaz: HTTP {e.code} {body}") from e
+    except (ConnectionError, urllib.error.URLError) as e:
+        # model během dotazu spadl (llama-server: „CUDA error“) – dotaz uložit k ladění a ohlásit srozumitelně
+        try:
+            write_json(ROOT / CONFIG.get("cacheRoot", "cache") / "llm-failed-request.json", {"url": url, "payload": payload, "error": str(e)})
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError(f"lokální model ({backend or 'local'}) během dotazu spadl – viz cache/hermes/llama-server.log; "
+                           f"dotaz uložen v cache/llm-failed-request.json ({e})") from e
     msg = resp["choices"][0]["message"]
     tm = resp.get("timings") or {}
     CALL_STATS.append({

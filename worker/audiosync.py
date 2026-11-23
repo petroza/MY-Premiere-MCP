@@ -95,6 +95,21 @@ def sync(params: dict, ctx) -> dict:
 
 
 _PAUSE_CACHE: dict = {}
+_AUDIO_CACHE: dict = {}
+
+
+def _decoded(path: str):
+    """Dekódovaný zvuk (16 kHz) – poslední soubor v paměti: plan_edit_local volá refine_edges + edge_levels pro tentýž
+    zdroj opakovaně (až 3 pokusy + náhradníci) a výběr úderů upoutávky měří hranice kandidátů (noc 2026-11-23)."""
+    from faster_whisper import decode_audio
+
+    key = (os.path.abspath(path), os.path.getmtime(path))
+    a = _AUDIO_CACHE.get(key)
+    if a is None:
+        a = decode_audio(path, sampling_rate=SR)
+        _AUDIO_CACHE.clear()
+        _AUDIO_CACHE[key] = a
+    return a
 
 
 def boundary_pauses(path: str, pairs: list[tuple[float, float]], before: float = 0.15, after: float = 0.30,
@@ -142,12 +157,11 @@ def edge_levels(params: dict, ctx) -> dict:
     rel kolem -25 dB a níž = ticho/nádech, nad -12 dB = střih skrz zvuk (useknuté slovo). Stejné měření jako
     scripts/check-cuts.mjs, aby stavba sama hlásila podezřelé hranice."""
     import numpy as np
-    from faster_whisper import decode_audio
 
     path = params["path"]
     if not os.path.exists(path) or not _has_audio(path):
         return {"edges": []}
-    audio = decode_audio(path, sampling_rate=SR)
+    audio = _decoded(path)
 
     def rms(a: float, b: float) -> float:
         seg = audio[max(0, int(a * SR)): max(0, int(b * SR))]
@@ -173,7 +187,6 @@ def refine_edges(params: dict, ctx) -> dict:
     bod najde v okolí buď konec řeči (hledá dopředu od 'at', kde energie klesne pod práh ticha), nebo
     začátek (hledá zpátky). Nikdy neposune přes 'maxExtend' a nikdy 'proti' směru hledání (jen prodlužuje)."""
     import numpy as np
-    from faster_whisper import decode_audio
 
     path = params["path"]
     points = params["points"]  # [{at, direction: "end"|"start", maxExtend}]
@@ -182,7 +195,7 @@ def refine_edges(params: dict, ctx) -> dict:
     if not _has_audio(path):
         raise ValueError(f"Soubor nemá zvukovou stopu: {path}")
 
-    audio = decode_audio(path, sampling_rate=SR)
+    audio = _decoded(path)
     total = len(audio) / SR
     frame_s = HOP / SR
     min_run = 3  # ticho = aspoň 3 rámce po 5 ms pod prahem (krátký pokles uvnitř slova ticho není)
@@ -208,6 +221,32 @@ def refine_edges(params: dict, ctx) -> dict:
         limit = round(max_extend / frame_s)
         step = 1 if direction == "end" else -1
         refined, clean = None, False
+        # začátek ve zvuku, ale mezi ním a prvním slovem (word) je pauza: střih do ní, ne pozpátku přes konec předchozího
+        # slova – hledání zpět prošlo výbuchem „k“ z „tak.“ do jeho uzávěru (15 ms ticha) a úsek začínal úlomkem
+        # „…k“ (AI tok S2/S3, upoutávka #22: střih 121,32 uvnitř „tak.“, pauza před „Vlastně“ 121,45–121,54)
+        word = pt.get("word")
+        if direction == "start" and word is not None and word > at and not quiet[at_idx]:
+            w_idx = min(len(ctx_env), round((word - clo) / frame_s) + 6)  # Whisperův začátek slova bývá i uprostřed ticha
+            # nejdelší tichý úsek v rozsahu, a jen skutečná pauza mezi slovy (≥ 60 ms) – kratší ticho bývá uzávěr hlásky
+            # uvnitř slova („s|t“ u „St…“: Whisperův začátek slova je u neznělých souhlásek pozdě, revize noc 2026-11-23)
+            best_run, cur = None, None
+            for i in range(at_idx + 1, w_idx):
+                if quiet[i]:
+                    cur = (cur[0], i) if cur else (i, i)
+                    if best_run is None or cur[1] - cur[0] > best_run[1] - best_run[0]:
+                        best_run = cur
+                else:
+                    cur = None
+            first_q, last_q = best_run if best_run else (None, None)
+            if last_q is not None and (last_q - first_q + 1) * frame_s >= 0.06:
+                # v pauze místo, kde je nejtišší okno, které měří kontrola hranic (40 ms před střihem, 12 ms za ním) –
+                # pevná rezerva před slovem nechala v okně doznívání předchozí hlásky (−16 dB místo −22 dB);
+                # aspoň 10 ms před koncem pauzy (náběh slova)
+                hi_j = max(first_q, last_q - 1)
+                j = min(range(first_q, hi_j + 1),
+                        key=lambda q: (float(ctx_env[max(0, q - 8): q + 3].max()), -q))
+                out.append({"at": at, "time": round(clo + j * frame_s, 3), "clean": True})
+                continue
         run = 0
         for k in range(0, limit + 1):
             i = at_idx + step * k
@@ -235,3 +274,4 @@ def refine_edges(params: dict, ctx) -> dict:
         refined = min(max(refined, at), at + max_extend) if direction == "end" else max(min(refined, at), at - max_extend)
         out.append({"at": at, "time": round(refined, 3), "clean": clean})
     return {"points": out}
+

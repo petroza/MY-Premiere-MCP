@@ -2,13 +2,14 @@
 // a konce (proti řeči v okolí) a hledá slova přepisu, která hranice protíná.
 //   node scripts/check-cuts.mjs "<název nebo ID sekvence>"
 // Výstup: řádek na hranici; ✖ = hranice protíná slovo nebo je tam hlasitý zvuk (> -12 dB proti řeči).
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'); // cesta s mezerami: .pathname by nechal %20
 const seqArg = process.argv[2];
 const c = new Client({ name: 'check-cuts', version: '0' });
 await c.connect(new StdioClientTransport({ command: process.execPath, args: [path.join(ROOT, 'server', 'index.js')], env: { ...process.env } }));

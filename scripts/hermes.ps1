@@ -88,6 +88,14 @@ for ($i = 0; $i -lt 180; $i++) {
         $own = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
             Where-Object { (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue).Path -eq $server }
         if ($own -and (Invoke-RestMethod "http://127.0.0.1:$Port/health" -TimeoutSec 2).status -eq 'ok') {
+            # zahrati: prvni dotaz na cerstvem serveru (urcity obsah) shodi llama.cpp na "CUDA error";
+            # po kratkem dotazu uz stejny dotaz projde (overeno 2026-11-22, plan upoutavky v Workeru)
+            try {
+                # kratky dotaz (12 tokenu) nestaci, ~300 tokenu ano
+                $txt = ('Toto je zahrivaci text pred prvnim skutecnym dotazem. ' * 30) + 'Odpovez jednim slovem.'
+                $w = '{"messages":[{"role":"user","content":"' + $txt + '"}],"max_tokens":4,"chat_template_kwargs":{"enable_thinking":false}}'
+                Invoke-RestMethod "http://127.0.0.1:$Port/v1/chat/completions" -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($w)) -ContentType 'application/json' -TimeoutSec 120 | Out-Null
+            } catch { }
             Write-Host "Hermes je pripraveny (http://127.0.0.1:$Port)." -ForegroundColor Green
             exit 0
         }

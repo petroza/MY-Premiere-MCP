@@ -1004,6 +1004,31 @@ def _teaser_candidates(path: str, segs: dict[int, dict], exclude: set, avoid: se
     return out
 
 
+def _clean_reason(t):
+    """Úvaha modelu pro uživatele: schéma ji utne na maxLength uprostřed slova a model tam občas sklouzne do azbuky
+    („…otázka -> vysvětл“, AI tok S8) – slova s azbukou pryč, utnutý konec zkrátit na poslední celou větu."""
+    if not isinstance(t, str):
+        return t
+    t = " ".join(w for w in t.split() if not re.search(r"[\u0400-\u04FF]", w)).strip()
+    if t and not re.search(r"[.!?…)\]]$", t):
+        k = max(t.rfind(". "), t.rfind("! "), t.rfind("? "))
+        t = t[: k + 1] if k > len(t) // 3 else t + "…"
+    return t
+
+
+def _teaser_cut_check(path: str, segs: dict[int, dict], cands: list[dict]) -> list[dict]:
+    """Vyřadí kandidáty, jejichž hranice by kontrola po stavbě (server edgeWarnings) označila za střih skrz řeč –
+    stejná předpověď jako u skládaného reelu (_edge_check: poloha střihu jako server + doladění podle zvuku).
+    Pauza nalezená až za dalším slovem (boundary_pauses hledá 0,3 s za ním – „životopis.|Ale“, ticho až za „Ale“)
+    se střihem nedá zasáhnout: dřív takové údery prošly, po stavbě je vyřadilo opakování plánu a z upoutávky 20 s
+    zbylo 6,5 s (noc 2026-11-23). Když by zbyly méně než 2 údery, nechá všechny (rozhodne server)."""
+    chk = _edge_check(path, segs, [(c["units"][0]["s"], c["units"][-1]["e"]) for c in cands])
+    if chk is None:
+        return cands
+    good = [c for c, (bi, bo) in zip(cands, chk) if not (bi or bo)]
+    return good if len(good) >= 2 else cands
+
+
 def _teaser_picks(c: dict) -> list:
     """Kandidát -> picks pro stavbu: celá věta přepisu jako číslo, část věty jako {id, fromWord, toWord}."""
     out = []
@@ -1105,7 +1130,7 @@ def _plan_focus(instruction: str, target: float, segs: dict[int, dict], chapters
     return {
         "note": None, "picks": [p for c in chosen for p in _teaser_picks(c)], "estimatedSec": round(total, 1),
         "alternates": [u["id"] for c in top if c not in chosen for u in c["units"]], "dropped": [],
-        "mode": "focus", "passages": len(cands), "reason": r.get("uvaha"),
+        "mode": "focus", "passages": len(cands), "reason": _clean_reason(r.get("uvaha")),
         "spares": [{"picks": _teaser_picks(c), "dur": c["dur"], "ids": sorted({u["id"] for u in c["units"]})}
                    for c in top if c not in chosen][:6],
         "editorial": [], "thesis": None, "keyChapters": core,
@@ -1141,7 +1166,7 @@ def _edge_check(path: str, segs: dict[int, dict], spans: list[tuple[float, float
         pts.append({"at": t_out, "direction": "end",
                     "maxExtend": max(0.0, min(0.4, max_out - t_out - 0.02)) if max_out != float("inf") else 0.4})
         pts.append({"at": t_in, "direction": "start", "maxExtend": max(0.0, min(0.3, t_in - min_in + 0.1)),
-                    "fallbackExtend": max(0.0, min(0.3, t_in - min_in - 0.02))})
+                    "fallbackExtend": max(0.0, min(0.3, t_in - min_in - 0.02)), "word": a})
     try:
         ref = audiosync.refine_edges({"path": path, "points": pts}, None)["points"]
         edges = []
@@ -1449,7 +1474,7 @@ def _plan_story(instruction: str, target: float, segs: dict[int, dict], chapters
     return {
         "note": None, "picks": [p for c in order for p in _teaser_picks(c)], "estimatedSec": round(total(), 1),
         "alternates": [u["id"] for c in top if c not in order for u in c["units"]], "dropped": [],
-        "mode": "story", "passages": len(raw), "reason": r.get("uvaha"), "stages": stages,
+        "mode": "story", "passages": len(raw), "reason": _clean_reason(r.get("uvaha")), "stages": stages,
         "stageChapters": {e: sorted(k for k, s in stage_of.items() if e in s) for e in range(1, n_st + 1)},
         "spares": [{"picks": _teaser_picks(c), "dur": c["dur"], "ids": sorted({u["id"] for u in c["units"]})}
                    for c in top if c not in order][:6],
@@ -1460,6 +1485,113 @@ def _plan_story(instruction: str, target: float, segs: dict[int, dict], chapters
     }
 
 
+_CONJ_START = re.compile(r"(a|ale|i|aby|a pak|a najednou|a tak|a proto|takže)\b", re.I)
+# příčinná souvislost uvnitř úderu („…a proto jsem se dostala na Novu“) – za pozdějším úderem vyzní jako jeho důsledek
+_CAUSAL = re.compile(r"\b(proto|takže|díky tomu|kvůli tomu|tím pádem|a tak)\b", re.I)
+# zdvořilosti na začátku a konci rozhovoru – v upoutávce nejsou úder (noc 2026-11-23: 30s upoutávka končila
+# „Děkuji moc za pozvání, Kristýnko.“)
+_SMALLTALK = re.compile(r"(^|[.!?]\s+)(děkuj\w*( moc| mockrát| vám| ti)* za (pozvání|rozhovor|příležitost)|ahoj\b|dobrý (den|večer)\b|na shledanou|vítej\w*\b|vítám\w*\b|mějte se|krásný zbytek)|za pozvání", re.I)
+
+
+def _teaser_host(cands: list, instruction: str):
+    """Moderátor/ka = mluvčí s nejkratší řečí mezi kandidáty (aspoň 2 mluvčí). None, když zadání moderátora výslovně chce
+    („bez moderátorky“ ho naopak vylučuje – revize #14)."""
+    if re.search(r"moder", instruction, re.I) and not re.search(r"\bbez\s+moder", instruction, re.I):
+        return None
+    spk: dict = {}
+    for c in cands:
+        for u in c["units"]:
+            if u.get("spk"):
+                spk[u["spk"]] = spk.get(u["spk"], 0.0) + (u["e"] - u["s"])
+    return min(spk, key=lambda k: spk[k]) if len(spk) >= 2 else None
+
+
+def _teaser_bad_spare(c: dict, text, host) -> bool:
+    """Náhradník, který server vkládá po vyřazení úderu kvůli hranici, nesmí být otázka ani úder moderátora (AI tok S8)."""
+    return text(c).strip().endswith("?") or (host is not None and c["units"][0].get("spk") == host)
+
+
+def _teaser_guard(order: list, cands: list, top: list, instruction: str, target: float, text, key) -> list:
+    """Kontrola složené upoutávky bez modelu (AI tok S3/S4/S8 – Hermes pravidla v zadání ignoroval):
+    1) úder začínající spojkou („A najednou byl pryč.“) bez vlastního podmětu divák vztáhne k předchozímu úderu
+       („…věci s ním.“ → zemřel respondent, ne máma). Když před ním ve střihu nestojí jeho původní předchozí věta,
+       nahradí se delší variantou, která ji obsahuje, jinak vypadne;
+    2) otázka (končí „?“) jen se svou odpovědí (úder, který v rozhovoru následuje hned po ní); jinak vypadne, a když
+       by zbyl jediný úder, nahradí ji nejlepší úder hosta;
+    3) moderátor/ka nejvýš jedním úderem, když zadání moderátora výslovně nechce; délka se doplní údery hosta tam,
+       kam časově patří (mezi údery nebo za poslední)."""
+    first = lambda c: c["units"][0]["id"]  # noqa: E731
+    last = lambda c: c["units"][-1]["id"]  # noqa: E731
+    st0 = lambda c: c["units"][0]["s"]  # noqa: E731
+    host = _teaser_host(cands, instruction)
+    out: list = []
+    for c in order:
+        prev = out[-1] if out else None
+        if _CONJ_START.match(text(c).strip()) and not (prev and last(prev) == first(c) - 1):
+            alt = [x for x in cands if last(x) == last(c) and first(x) == first(c) - 1
+                   and x["units"][0].get("spk") == c["units"][0].get("spk") and not any(key(x) & key(y) for y in out)]
+            if alt:
+                out.append(min(alt, key=lambda x: x["dur"]))
+                continue
+            if len(order) > 2:
+                continue
+        out.append(c)
+    order = out or order
+    fixed: list = []
+    for i, c in enumerate(order):
+        nxt = order[i + 1] if i + 1 < len(order) else None
+        if text(c).strip().endswith("?") and not (nxt and 0 < first(nxt) - last(c) <= 2):
+            # nejdřív dohledat skutečnou odpověď (úder hned po otázce v rozhovoru) a dát ji za otázku (AI tok S8)
+            ans = [x for x in cands if 0 < first(x) - last(c) <= 2 and x["units"][0].get("spk") != c["units"][0].get("spk")
+                   and not any(key(x) & key(y) for y in order)]
+            if ans:
+                fixed.extend([c, min(ans, key=lambda x: (first(x), x["dur"]))])
+                continue
+            alt = [x for x in top if x not in order and not _teaser_bad_spare(x, text, host)
+                   and not _CONJ_START.match(text(x).strip()) and not any(key(x) & key(y) for y in order)]
+            if alt and len(order) - 1 < 2:
+                fixed.append(alt[0])  # top je seřazené podle hodnocení modelu
+                continue
+            if len(order) > 1:
+                continue  # otázka s cizí odpovědí zavádí – radši kratší upoutávka (AI tok S8)
+        fixed.append(c)
+    if fixed != order:
+        order = sorted(fixed, key=st0)
+    # 4) úder s příčinnou spojkou, který v rozhovoru zazněl DŘÍV než úder před ním (noc 2026-11-23: krize z 21. minuty →
+    #    „…a proto jsem se dostala na Novu“ ze 2. minuty – Hermes pravidlo v zadání ignoroval): vypadne, při dvou úderech
+    #    se pořadí srovná podle času (délku pak doplní údery hosta na chronologická místa)
+    for i in range(len(order) - 1, 0, -1):
+        if i < len(order) and st0(order[i]) < st0(order[i - 1]) and _CAUSAL.search(text(order[i])):
+            if len(order) > 2:
+                order.pop(i)
+            else:
+                order = sorted(order, key=st0)
+    if host is not None:
+        for c in [c for c in order if c["units"][0].get("spk") == host][1:]:
+            if len(order) > 2:
+                order.remove(c)
+    for c in top:
+        if sum(x["dur"] for x in order) >= 0.85 * target:
+            break
+        if c in order or _teaser_bad_spare(c, text, host) or any(key(c) & key(y) for y in order) \
+                or _CONJ_START.match(text(c).strip()) or sum(x["dur"] for x in order) + c["dur"] > 1.15 * target:
+            continue
+        slot = next((i for i in range(1, len(order)) if st0(order[i - 1]) < st0(c) < st0(order[i])), None)
+        if slot is None and order and st0(c) > st0(order[-1]):
+            slot = len(order)  # za poslední úder, když zazněl později (AI tok S4: upoutávka jen 10,7 s z 20)
+        if slot is None and order and st0(c) < st0(order[0]) and all(st0(a) < st0(b) for a, b in zip(order, order[1:])):
+            slot = 0  # před první úder, jen když jdou údery chronologicky – jinak je první hák z pozdější části (revize)
+        if slot is not None:
+            order.insert(slot, c)
+    # pojistka: žádná věta dvakrát (náhrada úderu se spojkou hlídala překryv jen s údery před ní – noc 2026-11-23:
+    # 30s upoutávka měla #213 dvakrát za sebou)
+    uniq: list = []
+    for c in order:
+        if not any(key(c) & key(y) or {u["id"] for u in c["units"]} & {u["id"] for u in y["units"]} for y in uniq):
+            uniq.append(c)
+    return uniq
+
+
 def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude: set, backend: str, ctx,
                  path: str, avoid: set | None = None) -> dict | None:
     """Upoutávka ve stylu zpravodajství: údery ohodnotí model (hák, samostatnost, údernost), pak z nejlepších složí
@@ -1467,6 +1599,10 @@ def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude
     cands = _teaser_candidates(path, segs, exclude, avoid)
     if len(cands) < 2:
         return None
+    cands = [c for c in cands if not _SMALLTALK.search(" ".join(u["text"] for u in c["units"]))] or cands
+    n_all = len(cands)
+    cands = _teaser_cut_check(path, segs, cands)
+    ctx.progress(0.28, f"Hranice úderů ověřené podle zvuku: {len(cands)} z {n_all} kandidátů lze čistě střihnout")
     text = lambda c: " ".join(u["text"] for u in c["units"])  # noqa: E731
     key = lambda c: {(u["id"], u["w0"]) for u in c["units"]}  # noqa: E731
     gpu.STAT_PHASE = "teaser"
@@ -1534,7 +1670,10 @@ def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude
     if len(top) - len(bad) >= 2:
         top = [c for n, c in enumerate(top, 1) if n not in bad]
     ctx.progress(0.8, "LLM skládá upoutávku")
-    lines = "\n".join(f"U{n + 1} [{c['units'][0].get('spk') or '?'}] ({c['dur']:.0f} s): {text(c)}"
+    # čas v rozhovoru u každého úderu: model vidí, co zaznělo dřív a co později (AI tok S2: „…a proto jsem se dostala
+    # na Novu“ z 2. minuty stálo hned za smrtí mámy z 21. minuty a vyznělo jako její důsledek)
+    mmss = lambda x: f"{int(x // 60)}:{int(x % 60):02d}"  # noqa: E731
+    lines = "\n".join(f"U{n + 1} [{c['units'][0].get('spk') or '?'}] ({c['dur']:.0f} s, v rozhovoru {mmss(c['units'][0]['s'])}): {text(c)}"
                       for n, c in enumerate(top))
     speakers = {c["units"][0].get("spk") for c in top if c["units"][0].get("spk")}
     r = _chat_json(
@@ -1544,7 +1683,11 @@ def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude
         "První úder je hák (nejsilnější emoce nebo otázka), poslední nechá diváka v napětí a neprozradí rozuzlení. "
         + ("Mluví víc lidí: ukaž střet názorů – postav proti sobě údery různých mluvčích. " if len(speakers) > 1 else "") +
         "Údery se nesmí opakovat ani říkat totéž; dohromady mají naznačit příběh. Nesmí zkreslit, co mluvčí myslí: "
-        "žádné citace cizích slov, ironie ani věty, které mluvčí odmítá (vytržené by znamenaly opak). "
+        "žádné citace cizích slov, ironie ani věty, které mluvčí odmítá (vytržené by znamenaly opak). Pořadí nesmí "
+        "vytvořit souvislost, která v rozhovoru není: úder, který zazněl dřív a týká se jiného období nebo tématu, "
+        "nedávej hned za pozdější tak, aby vyzněl jako jeho důsledek (např. „…a proto…“ po větě o úmrtí). Úder bez "
+        "vlastního podmětu („A najednou byl pryč.“) divák vztáhne k osobě z předchozího úderu – dej ho jen za úder o "
+        "téže osobě. Upoutávka je hlavně o hostovi: moderátor/ka nejvýš jeden krátký úder (otázka), když je potřeba. "
         'Nejdřív v poli uvaha krátce zdůvodni, pak dej pořadí čísel úderů. JSON {"uvaha": "…", "poradi": [čísla]}.',
         400, schema={"type": "object", "properties": {"uvaha": {"type": "string", "maxLength": 600},
                                                       "poradi": {"type": "array", "minItems": 1, "maxItems": 5,
@@ -1562,19 +1705,28 @@ def _plan_teaser(instruction: str, target: float, segs: dict[int, dict], exclude
         order.remove(max(order[1:-1], key=lambda c: c["dur"]))
     # Pozn.: výměna delšího úderu za kratší „podle skóre“ (kvůli délce) rozbila děj – doprostřed upoutávky o smrti
     # mámy vložila větu o práci reportérky. Raději o pár sekund delší upoutávka než nesouvislá (2026-11-20).
+    # doplnění délky: jen tam, kam úder časově patří (mezi dva údery, které zazněly před ním a po něm) – jinak by
+    # vznikla souvislost, která v rozhovoru není (AI tok S2, viz výš)
+    st0 = lambda c: c["units"][0]["s"]  # noqa: E731
     for c in top:
         if sum(x["dur"] for x in order) >= 0.85 * target:
             break
-        if c not in order and sum(x["dur"] for x in order) + c["dur"] <= 1.15 * target:
-            order.insert(max(1, len(order) - 1), c)
+        if c in order or sum(x["dur"] for x in order) + c["dur"] > 1.15 * target:
+            continue
+        slot = next((i for i in range(1, len(order)) if st0(order[i - 1]) < st0(c) < st0(order[i])), None)
+        if slot is None and order and st0(c) > st0(order[-1]):
+            slot = len(order)
+        if slot is not None:
+            order.insert(slot, c)
+    order = _teaser_guard(order, cands, top, instruction, target, text, key)
     total = sum(c["dur"] for c in order)
     return {
         "note": None, "picks": [p for c in order for p in _teaser_picks(c)], "estimatedSec": round(total, 1),
         "alternates": [u["id"] for c in top if c not in order for u in c["units"]], "dropped": [],
-        "mode": "teaser", "passages": len(cands), "reason": r.get("uvaha"), "distorted": distorted,
+        "mode": "teaser", "passages": len(cands), "reason": _clean_reason(r.get("uvaha")), "distorted": distorted,
         # náhradní údery (nejlépe hodnocené mimo upoutávku): server je vloží, když kvůli slyšitelné hranici vyřadí úder
         "spares": [{"picks": _teaser_picks(c), "dur": c["dur"], "ids": sorted({u["id"] for u in c["units"]})}
-                   for c in top if c not in order][:6],
+                   for c in top if c not in order and not _teaser_bad_spare(c, text, _teaser_host(cands, instruction))][:6],
         "ranked": [[round(sc, 1), text(c)[:60], c["dur"]] for sc, c in rated[:8]],
         "editorial": [], "thesis": None, "keyChapters": [], "offTopic": [], "topics": [], "balanceTopics": False,
         "general": False, "topicSec": {}, "addedForQuestionAnswer": [], "fixedFragments": [],
