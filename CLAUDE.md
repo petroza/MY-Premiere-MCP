@@ -30,8 +30,8 @@ postupuj podle [`INSTALACE_NA_NOVEM_PC.md`](INSTALACE_NA_NOVEM_PC.md).
 6. **Povinná kontrola hranic u krátkých/punchy sestřihů** (upoutávky, highlight, jednotlivé silné výroky do ~1 min) ze zpravodajského/produkovaného materiálu (grafiky, infografiky, přebaly) – NE u běžných rozhovorů/schůzek se statickou kamerou (tam se přeskočí, viz sekce Více kamer):
    - Stav sekvenci přes `build_sequence_from_transcript` s `sceneCuts: true`: server detekuje skryté střihy obrazu
      v oknech kolem hranic klipů a hranici, kde střih padne do 1,5 s uvnitř klipu, na něj sám přichytí (jen když mezi
-     nimi není řeč – slovo se nikdy neuřízne). Ruční `detect_scene_cuts` není potřeba (a nikdy ne přes celý zdroj –
-     detekce neroste lineárně, 350 s nestihlo ani 15 min a zablokovalo Premiere).
+     nimi není řeč – slovo se nikdy neuřízne). Ruční `detect_scene_cuts` není potřeba (detekce běží ve Workeru
+     neuronovou sítí TransNetV2, ~17× rychleji než přehrávání, Premiere se nedotkne).
    - Výsledek vrátí `sceneCuts`: posunuté hranice a upozornění „⚠ … uvnitř řeči – obraz jen bleskne“. U upozornění
      zvaž výměnu věty za sousední se stejným smyslem, která leží celá v klidném záběru (reálně se osvědčilo 2026-09-17).
    - Zmiň v shrnutí, že jsi hranice ověřil (i když nic neopravoval), ať je vidět, že se to nepřeskočilo.
@@ -59,7 +59,7 @@ zkontrolují podle zvuku a vadné údery se vymění. Picks mohou být `{id, fro
 2. `build_multicam_sequence` s kamerami `{source, role: wide|close, speakers:[jméno]}` – offsety se dopočítají ze zvuku.
    Nejdřív `dryRun: true`, zkontroluj nejisté synchronizace a nenamapované mluvčí, pak ostrý běh.
 3. Lze kombinovat se střihem příběhu: `picks` (ID vět reference) → kamery se přepínají jen ve vybraných úsecích.
-4. `detect_scene_cuts` najde skutečné vizuální střihy kamer zapečené uvnitř jednoho zdrojového souboru (ne podle zvuku). Jako obecný nástroj na hledání řezů volej jen na výslovné přání (např. "najdi řezy kamer v tomhle záznamu") – vytvoří dočasnou sekvenci, u dlouhého úseku může trvat přes minutu. Proaktivní použití u krátkých sestřihů ze zpravodajského materiálu viz bod 6 výš v "Postup střihu podle obsahu".
+4. `detect_scene_cuts` najde skutečné vizuální střihy kamer zapečené uvnitř jednoho zdrojového souboru (ne podle zvuku). Jako obecný nástroj na hledání řezů volej jen na výslovné přání (např. "najdi řezy kamer v tomhle záznamu") – běží ve Workeru (TransNetV2), hodina záznamu ~3,5 min; jump cut na statické kameře nepozná. Proaktivní použití u krátkých sestřihů ze zpravodajského materiálu viz bod 6 výš v "Postup střihu podle obsahu".
 
 ## Dabing / dodatečně namluvený komentář (obraz pod komentář)
 Když je řeč jen na samostatné zvukové stopě (komentář namluvený dodatečně) a obraz jsou záznamy bez řeči

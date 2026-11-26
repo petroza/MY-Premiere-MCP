@@ -798,13 +798,17 @@ function withExtras(ranges, source, extraAudio) {
 }
 
 /** detect_scene_cuts s cache (viz popis nástroje) – volá ho i kontrola hranic při lokální stavbě. */
-async function detectSceneCutsCached(a) {
-  // Detekce je pomalá (6 min zdroje přes 5 min) a pokaždé vytvoří dočasnou sekvenci – výsledek se ukládá do cache
-  // (soubor + velikost + čas změny + citlivost); kratší rozsah se vezme z delší uložené analýzy.
+const TRANSNET = path.join(ROOT, 'models', 'transnetv2', 'transnetv2.onnx');
+async function detectSceneCutsCached(a, extra) {
+  // Střihy obrazu počítá Worker neuronovou sítí TransNetV2 (worker/scenecuts.py, ~17× rychleji než přehrávání, Premiere
+  // se nedotkne, blesky fotoaparátů nehlásí jako střih). Záloha bez modelu: Premierina Scene Edit Detection (pomalá –
+  // 6 min zdroje přes 5 min, dočasná sekvence). Výsledek se ukládá do cache (soubor + velikost + čas změny + citlivost
+  // + metoda); kratší rozsah se vezme z delší uložené analýzy.
+  const engine = fs.existsSync(TRANSNET) ? 'transnetv2' : 'premiere';
   const st = fs.existsSync(a.source) ? fs.statSync(a.source) : null;
   const dir = path.join(ROOT, 'cache', 'scenecuts');
   const key = st && crypto.createHash('sha1')
-    .update(JSON.stringify([normKey(a.source), st.size, st.mtimeMs, a.sensitivity || 'LowSensitivity'])).digest('hex');
+    .update(JSON.stringify([normKey(a.source), st.size, st.mtimeMs, a.sensitivity || 'LowSensitivity', engine === 'premiere' ? undefined : engine])).digest('hex');
   const file = key && path.join(dir, `${path.basename(a.source)}.${key.slice(0, 12)}.json`);
   const ranges = a.ranges?.length ? a.ranges : null;
   if (file && fs.existsSync(file)) {
@@ -816,7 +820,15 @@ async function detectSceneCutsCached(a) {
       return { ...c, cuts, count: cuts.length, analyzed: ranges ? undefined : Math.min(c.analyzed, to), ranges: ranges || undefined, cached: true };
     }
   }
-  const res = await premiere('detectSceneCuts', { ...a, source: await premiereMedia(a.source) }, 900000);
+  let res = null;
+  if (engine === 'transnetv2') {
+    try {
+      res = await runJob('scene_cuts', { path: originalMedia(a.source), ranges: ranges || undefined, to: a.to, sensitivity: a.sensitivity }, extra);
+    } catch (e) {
+      console.error(`detect_scene_cuts: TransNetV2 selhal (${e.message}) – zkouším Premiere`);
+    }
+  }
+  if (!res) res = await premiere('detectSceneCuts', { ...a, source: await premiereMedia(a.source) }, 900000);
   // značky na zdroji se hromadí i z dřívějších běhů (i mimo teď analyzovaný rozsah) – bez duplicit a jen do rozsahu
   res.cuts = [...new Set(res.cuts)].filter((x) => ranges || x <= res.analyzed + 0.05).sort((x, y) => x - y);
   res.count = res.cuts.length;
@@ -1655,22 +1667,23 @@ tool(
 
 tool(
   'detect_scene_cuts',
-  'Najde skutečné vizuální střihy kamer zapečené uvnitř JEDNOHO spojitého zdrojového souboru (Premierina Scene Edit Detection – ' +
-    'pozná změnu obrazu, ne kdo mluví). Spustit jen na výslovné přání uživatele – vytvoří dočasnou pracovní sekvenci se zadaným ' +
-    'zdrojem a rozsahem. U delšího úseku (přes ~5 min) to může trvat přes minutu, radši zvol kratší rozsah přes "to". ' +
-    'Vrací časy střihů VE ZDROJI (ne v timeline); výsledek se ukládá, opakované volání je okamžité. Na kontrolu hranic ' +
-    'sestřihu stačí "to" = konec posledního použitého úseku + 5 s. Hodí se i jako doplňkový signál ke zvukové diarizaci pro multicam, nebo na ' +
+  'Najde skutečné vizuální střihy kamer zapečené uvnitř JEDNOHO spojitého zdrojového souboru (neuronová síť TransNetV2 ' +
+    've Workeru – pozná změnu obrazu, ne kdo mluví; blesk fotoaparátu ani rychlý švenk nehlásí jako střih). Rychlé: ~17× ' +
+    'rychleji než přehrávání (hodina záznamu ~3,5 min, okna kolem hranic zlomky sekundy), Premiere se nedotkne. Jump cut ' +
+    'na statické kameře (stejný záběr, jen posun v čase) nepozná. Bez modelu záložně Premierina Scene Edit Detection ' +
+    '(pomalá, dočasná sekvence). Vrací časy střihů VE ZDROJI (ne v timeline) a prolínačky (transitions); výsledek se ' +
+    'ukládá, opakované volání je okamžité. Hodí se i jako doplňkový signál ke zvukové diarizaci pro multicam, nebo na ' +
     'nalezení skrytých řezů v jednom dlouhém záběru.',
   {
     source: z.string().describe('Cesta ke zdrojovému video souboru'),
-    to: z.number().optional().describe('Do kolika sekund od začátku zdroje analyzovat (výchozí celý soubor – pozor, může být pomalé)'),
+    to: z.number().optional().describe('Do kolika sekund od začátku zdroje analyzovat (výchozí celý soubor)'),
     ranges: z
       .array(z.object({ from: z.number(), to: z.number() }))
       .optional()
-      .describe('Jen tyto úseky zdroje (s) – na kontrolu hranic sestřihu stačí okna ±3 s kolem začátku a konce každého klipu; mnohem rychlejší než celý soubor'),
-    sensitivity: z.string().optional().describe('Citlivost detekce v Premiere, výchozí "LowSensitivity" (jediná ověřená hodnota)'),
+      .describe('Jen tyto úseky zdroje (s) – na kontrolu hranic sestřihu stačí okna ±3 s kolem začátku a konce každého klipu'),
+    sensitivity: z.string().optional().describe('Citlivost: "LowSensitivity" (výchozí, jen jisté střihy), "MediumSensitivity", "HighSensitivity"'),
   },
-  (a) => detectSceneCutsCached(a),
+  (a, extra) => detectSceneCutsCached(a, extra),
 );
 
 tool(

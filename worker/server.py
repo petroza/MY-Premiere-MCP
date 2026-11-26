@@ -28,7 +28,7 @@ if (_ffbin / "ffmpeg.exe").exists():
     os.environ["PATH"] = str(_ffbin) + os.pathsep + os.environ.get("PATH", "")
 
 from worker.common import CONFIG, Cancelled, cache_dir, log, original_media, read_json, read_token, write_json  # noqa: E402
-from worker import aerun, analysis, asr, audiosync, broll, diarize, frame, gpu, media, youtuber  # noqa: E402
+from worker import aerun, analysis, asr, audiosync, broll, diarize, frame, gpu, media, scenecuts, youtuber  # noqa: E402
 
 VERSION = "0.2.0"
 HANDLERS = {
@@ -39,6 +39,7 @@ HANDLERS = {
     "forget_voice": diarize.forget_voice,
     "sync": audiosync.sync,
     "refine_edges": audiosync.refine_edges,
+    "scene_cuts": scenecuts.detect,  # střihy obrazu TransNetV2 (náhrada Premierina Scene Edit Detection)
     "edge_levels": audiosync.edge_levels,
     "analyze": analysis.analyze,
     "plan_edit": analysis.plan_edit,

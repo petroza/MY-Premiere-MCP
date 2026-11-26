@@ -360,6 +360,21 @@ if (-not $SkipModels) {
         Remove-Item models\diarization\seg.tar.bz2 -Force
         Download "$sherpa/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx" 'models\diarization\3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced.onnx'
     }
+
+    # TransNetV2 (Soucek & Lokoc 2020, MIT) - strihy obrazu ve zdroji (detect_scene_cuts, kontrola hranic), 31 MB
+    Write-Host '  [6b] Strihy obrazu (TransNetV2)'
+    $tn = 'models\transnetv2\transnetv2.onnx'
+    if (Test-Path $tn) { Info 'TransNetV2 uz je na miste' }
+    elseif ($hasOffline -and (CopyFromOffline 'models\transnetv2' 'model strihu obrazu')) { }
+    else {
+        New-Item -ItemType Directory -Force models\transnetv2 | Out-Null
+        Download 'https://huggingface.co/elya5/transnetv2/resolve/main/transnetv2.onnx' $tn
+        $h = (Get-FileHash $tn -Algorithm SHA256).Hash.ToLower()
+        if ($h -ne 'c4d54a682bace32f25136ef83ca2c9d403e8f8193775efeb995172a0d95a8e0c') {
+            Remove-Item $tn -Force
+            Warn 'TransNetV2: nesedi kontrolni soucet - stazeni smazano' 'Detekce strihu pojede pres Premiere (pomaleji). Spust instalaci znovu.'
+        }
+    }
 } else {
     Warn 'Modely preskoceny (-SkipModels) - prepis zvuku nebude fungovat' 'Pozdeji spust instalaci znovu bez -SkipModels.'
 }
@@ -482,6 +497,8 @@ if (-not $SkipModels) {
 
     $seg = Join-Path $root 'models\diarization\sherpa-onnx-pyannote-segmentation-3-0\model.onnx'
     if (Test-Path $seg) { Ok 'Model diarizace OK' } else { Fail 'Model diarizace chybi' 'Spust instalaci znovu.' }
+    if (Test-Path (Join-Path $root 'models\transnetv2\transnetv2.onnx')) { Ok 'Model strihu obrazu (TransNetV2) OK' }
+    else { Warn 'Model strihu obrazu (TransNetV2) chybi' 'Detekce strihu pojede pres Premiere (pomaleji). Spust instalaci znovu.' }
 }
 
 if (-not $SkipModels -and -not $NoLocalLLM) {
